@@ -1,0 +1,3816 @@
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\base\Model;
+
+/**
+ * ContactForm is the model behind the contact form.
+ */
+class ContactForm extends Model
+{
+    public $name;
+    public $email;
+    public $subject;
+    public $body;
+    public $verifyCode;
+
+    /**
+     * @return array the validation rules.
+     */
+    public function rules()
+    {
+        return [
+            // name, email, subject and body are required
+            [['name', 'email', 'subject', 'body'], 'required'],
+            // email has to be a valid email address
+            ['email', 'email'],
+            // verifyCode needs to be entered correctly
+            ['verifyCode', 'captcha'],
+        ];
+    }
+
+    /**
+     * @return array customized attribute labels
+     */
+    public function attributeLabels()
+    {
+        return [
+            'verifyCode' => 'Verification Code',
+        ];
+    }
+
+    /**
+     * Sends an email to the specified email address using the information collected by this model.
+     * @param  string  $email the target email address
+     * @return boolean whether the model passes validation
+     */
+    public function contact($email)
+    {
+        if ($this->validate()) {
+            Yii::$app->mailer->compose()
+                ->setTo($email)
+                ->setFrom([$this->email => $this->name])
+                ->setSubject($this->subject)
+                ->setTextBody($this->body)
+                ->send();
+
+            return true;
+        } else {
+            return false;
+        }
+    }
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\behaviors\TimestampBehavior;
+
+/**
+ * This is the model class for table "{{%current_fight}}".
+ *
+ * @property integer $id
+ * @property string $name
+ *
+ */
+class CurrentFight extends \yii\db\ActiveRecord
+{
+    /**
+     * @inheritdoc
+     */
+    public static function tableName()
+    {
+        return '{{%current_fight}}';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['fightId', 'robot1', 'robot2', 'team1', 'team2', 'updated_at'], 'required']
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function attributeLabels()
+    {
+        return [
+            'fightId' => 'Fight',
+            'robot1' => 'Robot 1',
+        	'robot2' => 'Robot 2',
+        	'team1' => 'Team 1',
+        	'team2' => 'Team 2',
+        	'updated_at' => 'Time'
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function behaviors()
+    {
+    	return
+    	[
+    		TimestampBehavior::className(),
+    	];
+    }
+
+    public function set($fightId, $title, $robot1, $robot2, $team1, $team2)
+    {
+    	// id is always 1
+    	// set fightId = $fightId, title = $title, robot1 = $robot1, robot2 = $robot2,
+    	// team1 = $team1, team2 = $team2, updated_at = now()
+		$record = $this->findOne(1);
+		$record->fightId = $fightId;
+		$record->title = $title;
+		$record->robot1 = $robot1;
+		$record->robot2 = $robot2;
+		$record->team1 = $team1;
+		$record->team2 = $team2;
+		return $record->update(false);
+    }
+
+    public function clear()
+    {
+    	// id is always 1
+    	// set fightId = 0, title = NULL, robot1 = NULL, robot2 = NULL,
+    	// team1 = NULL, team2 = NULL, updated_at = now()
+		$record = $this->findOne(1);
+		$record->fightId = 0;
+		$record->title = NULL;
+		$record->robot1 = NULL;
+		$record->robot2 = NULL;
+		$record->team1 = NULL;
+		$record->team2 = NULL;
+		return $record->update(false);
+	}
+
+    /**
+     * Return ID of current fight, zero if no fight running
+     * @return integer
+     */
+    public static function getCurrentId()
+    {
+    	$model = static::findOne(1);
+    	return $model->fightId;
+    }
+
+}
+
+<?php
+namespace app\models;
+
+use Yii;
+use yii\db\ActiveRecord;
+use yii\db\QueryBuilder;
+use app\models\Robot;
+use app\models\User;
+use app\models\Event;
+use app\models\Entrant;
+use app\models\Fights;
+
+/**
+ * Db model
+ *
+ * Provides import/export methods for database tables
+ *
+ */
+class Db extends ActiveRecord
+{
+	/* Parameters to access the database */
+	private $username;
+	private $password;
+	private $database;
+	private $prefix;
+	private $filename;
+	private $fileHandle;
+	private $queryBuilder;
+
+	public function __construct()
+	{
+	    $this->queryBuilder = new QueryBuilder(Yii::$app->db);
+		$this->username = Yii::$app->db->username;
+	    $this->password = Yii::$app->db->password;
+	    preg_match('/dbname=(.+)/', Yii::$app->db->dsn, $matches);
+	    $this->database = $matches[1];
+	    $this->prefix = Yii::$app->db->tablePrefix;
+	    $this->filename = Yii::getAlias('@runtime') . DIRECTORY_SEPARATOR . $this->database . '_' . date("Y-m-d-H-i-s") . '.sql';
+	}
+
+	public function exportEnd()
+	{
+		$this->fileHandle = fopen($this->filename, 'a');
+		// Delete entrants that were not confirmed for completed events
+		fwrite($this->fileHandle, "DELETE `e` from `$this->prefix" . "entrant` `e` ");
+		fwrite($this->fileHandle, "LEFT JOIN `$this->prefix" . "event` `v` ON `v`.`id` = `e`.`eventId` ");
+		fwrite($this->fileHandle, "WHERE `e`.`status` = -1 AND `v`.`state` LIKE \"Complete\";\n");
+		// Unlock the online database
+		fwrite($this->fileHandle, "UPDATE `$this->prefix" ."lock` SET `lockState` = '0', ");
+		fwrite($this->fileHandle, "`lockUserId` = NULL WHERE `$this->prefix" . "lock`.`id` = 1;");
+
+		fwrite($this->fileHandle, "SELECT '<COMPLETE>' AS ' ';\n");
+		fclose($this->fileHandle);
+	}
+
+	public function exportUsers()
+	{
+		// For web:
+		// Export all users - recreate the table to ensure consistency
+		// Export dummy email addresses and password as "password" for all teams
+		// Export dummy email address and password as "admin" for administrator
+	    // For local:
+		// Export only users that have been created/modified since the last import
+		// Export teams, do not export administrator
+		$this->fileHandle = fopen($this->filename, 'a');
+		$model = new User;
+		$query = $model->find();
+		if (Yii::$app->params['antlog_env'] == 'local')
+		{
+			$query = $query->where(['user_group' => User::ROLE_TEAM]);
+			$query = $query->andWhere(['or',['>', 'created_at', 0],['>', 'updated_at', 0]]);
+		}
+	    $records = $query->all();
+		$numRecords = $query->count();
+		$passwordHash = Yii::$app->security->generatePasswordHash('password');
+		$userPassword = "`password_hash`='$passwordHash', "; /* dummy password_hash */
+		$email = "`email`='email@example.com', "; /* dummy email */
+		if (Yii::$app->params['antlog_env'] == 'web')
+		{
+			fwrite($this->fileHandle, "DROP TABLE IF EXISTS `$this->prefix" . "user`;\n");
+			fwrite($this->fileHandle, "CREATE TABLE IF NOT EXISTS `$this->prefix" . "user` (\n");
+			fwrite($this->fileHandle, " `id` int(11) NOT NULL AUTO_INCREMENT,\n");
+			fwrite($this->fileHandle, " `username` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL,\n");
+			fwrite($this->fileHandle, " `password_hash` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL,\n");
+			fwrite($this->fileHandle, " `auth_key` varchar(32) CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL,\n");
+			fwrite($this->fileHandle, " `password_reset_token` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci DEFAULT NULL,\n");
+			fwrite($this->fileHandle, " `email` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL,\n");
+			fwrite($this->fileHandle, " `status` smallint(6) NOT NULL DEFAULT '10',\n");
+			fwrite($this->fileHandle, " `created_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " `updated_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " `user_group` smallint(6) NOT NULL DEFAULT '2',\n");
+			fwrite($this->fileHandle, " `team_name` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL,\n");
+			fwrite($this->fileHandle, " PRIMARY KEY (`id`),\n");
+			fwrite($this->fileHandle, " UNIQUE KEY `username` (`username`)\n");
+			fwrite($this->fileHandle, ") ENGINE=InnoDB  DEFAULT CHARSET=utf8;\n");
+		}
+		foreach ($records as $record)
+		{
+			if (Yii::$app->params['antlog_env'] == 'web')
+			{
+				// INSERT INTO table SET col1=val1, col2=val2;
+				if ($record->user_group == User::ROLE_ADMIN)
+				{
+					$password = "`password_hash`='" . Yii::$app->security->generatePasswordHash('admin') . "', ";
+				}
+				else
+				{
+					$password = $userPassword;
+				}
+				$createdAt = "`created_at`=0, ";
+				$updatedAt = "`updated_at`=0, ";
+				$update = '';
+			}
+			else
+			{
+				$createdAt = "`created_at`=$record->created_at, ";
+				$updatedAt = "`updated_at`=$record->updated_at, ";
+				// INSERT INTO table SET col1=val1, col2=val2 ON DUPLICATE KEY UPDATE col1=val1, col2=val2;
+				$password = "`password_hash`='$record->password_hash', "; /* export actual password hash */
+				$email = "`email`='" . $this->escapeString($record->email) . "', "; /* real email */
+				$update = " ON DUPLICATE KEY UPDATE ";
+				$update .= "`username`='" . $this->escapeString($record->username) . "', ";
+				if ($record->email != 'email@example.com')
+				{
+					$update .= "`email`='" . $this->escapeString($record->email) . "', ";
+				}
+				$update .= "`team_name`='" . $this->escapeString($record->team_name) . "'";
+				if ($record->created_at != 0)
+				{
+					$update .= ", `created_at`=$record->created_at";
+				}
+				if ($record->updated_at != 0)
+				{
+					$update .= ", `updated_at`=$record->updated_at";
+				}
+			}
+
+			$string = "INSERT INTO `$this->prefix" . "user` SET ";
+			$string .= "`id`=$record->id, ";
+			$string .= "`username`='" . $this->escapeString($record->username) . "', ";
+			$string .= $password;
+			$string .= "`auth_key`='$record->auth_key', "; /* used for "remember me" */
+			$string .= "`password_reset_token`=NULL, "; /* null password_reset_token */
+			$string .= $email;
+			$string .= "`status`=$record->status, ";
+			$string .= $createdAt;
+			$string .= $updatedAt;
+			$string .= "`user_group`=$record->user_group, ";
+			$string .= "`team_name`='" . $this->escapeString($record->team_name) . "'";
+			$string .= $update . ";\n";
+			fwrite($this->fileHandle, $string);
+		}
+		fclose($this->fileHandle);
+	}
+
+	public function exportRobots()
+	{
+		// For web:
+		// Export all robots - recreate the table to ensure consistency
+		// For local:
+		// Export only robots created/modified since last import
+		$this->fileHandle = fopen($this->filename, 'a');
+		$model = new Robot;
+		$query = $model->find();
+		if (Yii::$app->params['antlog_env'] == 'local')
+		{
+			$query = $query->where(['>', 'created_at', 0])->orWhere(['>', 'updated_at', 0]);
+		}
+	    $records = $query->all();
+		$numRecords = $query->count();
+		if (Yii::$app->params['antlog_env'] == 'web')
+		{
+			fwrite($this->fileHandle, "DROP TABLE IF EXISTS `$this->prefix" . "robot`;\n");
+			fwrite($this->fileHandle, "CREATE TABLE IF NOT EXISTS `$this->prefix" . "robot` (\n");
+			fwrite($this->fileHandle, " `id` int(10) NOT NULL AUTO_INCREMENT,\n");
+			fwrite($this->fileHandle, " `name` varchar(100) CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL,\n");
+			fwrite($this->fileHandle, " `teamId` int(10) unsigned NOT NULL COMMENT 'CONSTRAINT FOREIGN KEY (teamId) REFERENCES $this->prefix" . "user(id)',\n");
+			fwrite($this->fileHandle, " `classId` int(10) unsigned NOT NULL COMMENT 'CONSTRAINT FOREIGN KEY (classId) REFERENCES $this->prefix" . "robot_class(id)',\n");
+			fwrite($this->fileHandle, " `typeId` smallint(6) NOT NULL DEFAULT '0' COMMENT 'CONSTRAINT FOREIGN KEY (typeId) REFERENCES $this->prefix" . "robot_type(id)',\n");
+			fwrite($this->fileHandle, " `active` tinyint(1) NOT NULL,\n");
+			fwrite($this->fileHandle, " `created_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " `updated_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " PRIMARY KEY (`id`),\n");
+			fwrite($this->fileHandle, " UNIQUE KEY `RobotID_2` (`id`),\n");
+			fwrite($this->fileHandle, " KEY `RobotID` (`id`)\n");
+			fwrite($this->fileHandle, ") ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8 COLLATE utf8_unicode_ci;\n");
+		}
+		foreach ($records as $record)
+		{
+			if (Yii::$app->params['antlog_env'] == 'web')
+			{
+				$createdAt = "`created_at`=0, ";
+				$updatedAt = "`updated_at`=0, ";
+				$update = '';
+			}
+			else
+			{
+				$createdAt = "`created_at`=$record->created_at, ";
+				$updatedAt = "`updated_at`=$record->updated_at, ";
+				$update = " ON DUPLICATE KEY UPDATE ";
+				$update .= "`name`='" . $this->escapeString($record->name) . "', ";
+				$update .= "`classId`=$record->classId, ";
+				$update .= "`typeId`=$record->typeId, ";
+				$update .= "`active`=$record->active";
+				if ($record->created_at != 0)
+				{
+					$update .= ", `created_at`=$record->created_at";
+				}
+				if ($record->updated_at != 0)
+				{
+					$update .= ", `updated_at`=$record->updated_at";
+				}
+			}
+			$string = "INSERT INTO `$this->prefix" . "robot` SET ";
+			$string .= "`id`=$record->id, ";
+			$string .= "`name`='" . $this->escapeString($record->name) . "', ";
+			$string .= "`teamId`=$record->teamId, ";
+			$string .= "`classId`=$record->classId, ";
+			$string .= "`typeId`=$record->typeId, ";
+			$string .= $createdAt;
+			$string .= $updatedAt;
+			$string .= "`active`=$record->active";
+			$string .= $update . ";\n";
+			fwrite($this->fileHandle, $string);
+		}
+		fclose($this->fileHandle);
+	}
+
+	public function exportEvents()
+	{
+		// For web:
+		// Export all events - recreate the table to ensure consistency
+		// For local:
+		// Export only events created or modified since last import
+		$this->fileHandle = fopen($this->filename, 'a');
+		$model = new Event;
+		$query = $model->find();
+		if (Yii::$app->params['antlog_env'] == 'local')
+		{
+			$query = $query->where(['>', 'created_at', 0])->orWhere(['>', 'updated_at', 0]);
+		}
+	    $records = $query->all();
+		$numRecords = $query->count();
+		if (Yii::$app->params['antlog_env'] == 'web')
+		{
+			fwrite($this->fileHandle, "DROP TABLE IF EXISTS `$this->prefix" . "event`;\n");
+			fwrite($this->fileHandle, "CREATE TABLE IF NOT EXISTS `$this->prefix" . "event` (\n");
+			fwrite($this->fileHandle, " `id` int(10) NOT NULL AUTO_INCREMENT,\n");
+			fwrite($this->fileHandle, " `name` varchar(100) CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL,\n");
+			fwrite($this->fileHandle, " `eventDate` date NOT NULL,\n");
+			fwrite($this->fileHandle, " `state` enum('Complete','Running','Ready','Setup','Closed','Registration','Future') NOT NULL DEFAULT 'Registration',\n");
+			fwrite($this->fileHandle, " `classId` int(11) NOT NULL COMMENT 'CONSTRAINT FOREIGN KEY (classId) REFERENCES $this->prefix" . "robot_class(id)',\n");
+			fwrite($this->fileHandle, " `eventType` tinyint(4) NOT NULL DEFAULT '1' COMMENT 'CONSTRAINT FOREIGN KEY (eventType) REFERENCES $this->prefix" . "event_type(id)',\n");
+			fwrite($this->fileHandle, " `num_groups` tinyint(4) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " `offset` int(11) DEFAULT NULL,\n");
+			fwrite($this->fileHandle, " `created_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " `updated_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " `organiserId` int(10) unsigned NOT NULL COMMENT 'CONSTRAINT FOREIGN KEY (organiserId) REFERENCES $this->prefix" . "user(id)',\n");
+			fwrite($this->fileHandle, " `venue` text NOT NULL,\n");
+			fwrite($this->fileHandle, " PRIMARY KEY (`id`),\n");
+			fwrite($this->fileHandle, " UNIQUE KEY `id` (`id`)\n");
+			fwrite($this->fileHandle, ") ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8 COLLATE utf8_unicode_ci;\n");
+		}
+		foreach ($records as $record)
+		{
+			if (Yii::$app->params['antlog_env'] == 'web')
+			{
+				$createdAt = "`created_at`=0, ";
+				$updatedAt = "`updated_at`=0, ";
+				$update = '';
+			}
+			else
+			{
+				$createdAt = "`created_at`=$record->created_at, ";
+				$updatedAt = "`updated_at`=$record->updated_at, ";
+				$update = " ON DUPLICATE KEY UPDATE ";
+				$update .= "`name`='" . $this->escapeString($record->name) . "', ";
+				$update .= "`eventDate`='$record->eventDate', ";
+				$update .= "`state`='$record->state', ";
+				$update .= "`eventType`=$record->eventType, ";
+				$update .= "`num_groups`=$record->num_groups, ";
+				if ($record->offset == NULL)
+				{
+					$update .= "`offset`=NULL";
+				}
+				else
+				{
+					$update .= "`offset`=$record->offset";
+				}
+				if ($record->created_at != 0)
+				{
+					$update .= ", `created_at`=$record->created_at";
+				}
+				if ($record->updated_at != 0)
+				{
+					$update .= ", `updated_at`=$record->updated_at";
+				}
+				$update .= ", `organiserId`=$record->organiserId";
+				$update .= ", `venue`='" . $this->escapeString($record->venue) . "'";
+			}
+			$string = "INSERT INTO `$this->prefix" . "event` SET ";
+			$string .= "`id`=$record->id, ";
+			$string .= "`name`='" . $this->escapeString($record->name) . "', ";
+			$string .= "`eventDate`='$record->eventDate', ";
+			$string .= "`state`='$record->state', ";
+			$string .= "`classId`=$record->classId, ";
+			$string .= "`eventType`=$record->eventType, ";
+			$string .= "`num_groups`=$record->num_groups, ";
+			$string .= $createdAt;
+			$string .= $updatedAt;
+			$string .= "`organiserId`=$record->organiserId, ";
+			$string .= "`venue`='" . $this->escapeString($record->venue) . "', ";
+			if ($record->offset == NULL)
+			{
+				$string .= "`offset`=NULL";
+			}
+			else
+			{
+				$string .= "`offset`=$record->offset";
+			}
+			$string .= $update . ";\n";
+			fwrite($this->fileHandle, $string);
+		}
+		fclose($this->fileHandle);
+	}
+
+	public function exportEntrants()
+	{
+		// For web:
+		// Export all entrants - to cater for online sign-ups
+		// For local:
+		// Export only entrants created/modified since last import
+		$this->fileHandle = fopen($this->filename, 'a');
+		$model = new Entrant;
+		$query = $model->find();
+		if (Yii::$app->params['antlog_env'] == 'local')
+		{
+			$query = $query->where(['>', 'created_at', 0])->orWhere(['>', 'updated_at', 0]);
+		}
+	    $records = $query->all();
+		$numRecords = $query->count();
+		if (Yii::$app->params['antlog_env'] == 'web')
+		{
+			fwrite($this->fileHandle, "DROP TABLE IF EXISTS `$this->prefix" . "entrant`;\n");
+			fwrite($this->fileHandle, "CREATE TABLE IF NOT EXISTS `$this->prefix" . "entrant` (\n");
+			fwrite($this->fileHandle, " `id` int(10) NOT NULL AUTO_INCREMENT,\n");
+			fwrite($this->fileHandle, " `eventId` int(10) unsigned NOT NULL COMMENT 'CONSTRAINT FOREIGN KEY (eventId) REFERENCES $this->prefix" . "event(id)',\n");
+			fwrite($this->fileHandle, " `robotId` int(10) unsigned NOT NULL COMMENT 'CONSTRAINT FOREIGN KEY (robotId) REFERENCES $this->prefix" . "robot(id)',\n");
+			fwrite($this->fileHandle, " `status` int(11) DEFAULT '-1',\n");
+			fwrite($this->fileHandle, " `finalFightId` int(11) NOT NULL DEFAULT '0' COMMENT 'CONSTRAINT FOREIGN KEY (finalFightId) REFERENCES $this->prefix" . "fights(id)',\n");
+			fwrite($this->fileHandle, " `group_num` int(11) DEFAULT NULL,\n");
+			fwrite($this->fileHandle, " `created_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " `updated_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " PRIMARY KEY (`id`),\n");
+			fwrite($this->fileHandle, " UNIQUE KEY `EntrantID` (`id`)\n");
+			fwrite($this->fileHandle, ") ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8;\n");
+		}
+		foreach ($records as $record)
+		{
+			if (Yii::$app->params['antlog_env'] == 'web')
+			{
+				$createdAt = "`created_at`=0, ";
+				$updatedAt = "`updated_at`=0, ";
+				$update = '';
+			}
+			else
+			{
+				$createdAt = "`created_at`=$record->created_at, ";
+				$updatedAt = "`updated_at`=$record->updated_at, ";
+				$update = " ON DUPLICATE KEY UPDATE ";
+				$update .= "`status`=$record->status, ";
+				$update .= "`finalFightId`=$record->finalFightId, ";
+				if ($record->group_num == NULL)
+				{
+					$update .= "`group_num`=NULL";
+				}
+				else
+				{
+					$update .= "`group_num`=$record->group_num";
+				}
+				if ($record->created_at != 0)
+				{
+					$update .= ", `created_at`=$record->created_at";
+				}
+				if ($record->updated_at != 0)
+				{
+					$update .= ", `updated_at`=$record->updated_at";
+				}
+			}
+			$string = "INSERT INTO `$this->prefix" . "entrant` SET ";
+			$string .= "`id`=$record->id, ";
+			$string .= "`eventId`=$record->eventId, ";
+			$string .= "`robotId`=$record->robotId, ";
+			$string .= "`status`=$record->status, ";
+			$string .= "`finalFightId`=$record->finalFightId, ";
+			$string .= $createdAt;
+			$string .= $updatedAt;
+			if ($record->group_num == NULL)
+			{
+				$string .= "`group_num`=NULL";
+			}
+			else
+			{
+				$string .= "`group_num`=$record->group_num";
+			}
+			$string .= $update . ";\n";
+			fwrite($this->fileHandle, $string);
+		}
+		fclose($this->fileHandle);
+	}
+
+	public function exportFights()
+	{
+		// For web:
+		// Export all fights - to prevent changes to robots that are in previous results
+		// For local:
+		// Export only fights created/modified since last import
+		$this->fileHandle = fopen($this->filename, 'a');
+		$model = new Fights;
+		$query = $model->find();
+		if (Yii::$app->params['antlog_env'] == 'local')
+		{
+			$query = $query->where(['>', 'created_at', 0])->orWhere(['>', 'updated_at', 0]);
+		}
+	    $records = $query->all();
+		$numRecords = $query->count();
+		if (Yii::$app->params['antlog_env'] == 'web')
+		{
+			fwrite($this->fileHandle, "DROP TABLE IF EXISTS `$this->prefix" . "fights`;\n");
+			fwrite($this->fileHandle, "CREATE TABLE IF NOT EXISTS `$this->prefix" . "fights` (\n");
+			fwrite($this->fileHandle, " `id` int(10) NOT NULL AUTO_INCREMENT,\n");
+			fwrite($this->fileHandle, " `eventId` int(11) NOT NULL COMMENT 'CONSTRAINT FOREIGN KEY (eventId) REFERENCES $this->prefix" . "event(id)',\n");
+			fwrite($this->fileHandle, " `fightGroup` int(11) NOT NULL,\n");
+			fwrite($this->fileHandle, " `fightRound` int(11) NOT NULL,\n");
+			fwrite($this->fileHandle, " `fightBracket` set('W','L','F') CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL,\n");
+			fwrite($this->fileHandle, " `fightNo` int(11) NOT NULL,\n");
+			fwrite($this->fileHandle, " `robot1Id` int(11) NOT NULL DEFAULT '-1' COMMENT 'CONSTRAINT FOREIGN KEY (robot1Id) REFERENCES $this->prefix" . "entrant(id)',\n");
+			fwrite($this->fileHandle, " `robot2Id` int(11) NOT NULL DEFAULT '-1' COMMENT 'CONSTRAINT FOREIGN KEY (robot2Id) REFERENCES $this->prefix" . "entrant(id)',\n");
+			fwrite($this->fileHandle, " `winnerId` int(11) NOT NULL DEFAULT '-1' COMMENT 'CONSTRAINT FOREIGN KEY (winnerId) REFERENCES $this->prefix" . "entrant(id)',\n");
+			fwrite($this->fileHandle, " `loserId` int(11) NOT NULL DEFAULT '-1' COMMENT 'CONSTRAINT FOREIGN KEY (loserId) REFERENCES $this->prefix" . "entrant(id)',\n");
+			fwrite($this->fileHandle, " `winnerNextFight` int(10) unsigned NOT NULL,\n");
+			fwrite($this->fileHandle, " `loserNextFight` int(10) unsigned NOT NULL,\n");
+			fwrite($this->fileHandle, " `sequence` int(11) NOT NULL DEFAULT '-1',\n");
+			fwrite($this->fileHandle, " `current` tinyint(1) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " `created_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " `updated_at` int(11) NOT NULL DEFAULT '0',\n");
+			fwrite($this->fileHandle, " PRIMARY KEY (`id`),\n");
+			fwrite($this->fileHandle, " UNIQUE KEY `FightID` (`id`)\n");
+			fwrite($this->fileHandle, ") ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci AUTO_INCREMENT=1;\n");
+		}
+		foreach ($records as $record)
+		{
+			if (Yii::$app->params['antlog_env'] == 'web')
+			{
+				$createdAt = "`created_at`=0, ";
+				$updatedAt = "`updated_at`=0, ";
+				$update = '';
+			}
+			else
+			{
+				$createdAt = "`created_at`=$record->created_at, ";
+				$updatedAt = "`updated_at`=$record->updated_at, ";
+				$update = " ON DUPLICATE KEY UPDATE ";
+				$update .= "`robot1Id`=$record->robot1Id, ";
+				$update .= "`robot2Id`=$record->robot2Id, ";
+				$update .= "`winnerId`=$record->winnerId, ";
+				$update .= "`loserId`=$record->loserId, ";
+				$update .= "`sequence`=$record->sequence";
+				if ($record->created_at != 0)
+				{
+					$update .= ", `created_at`=$record->created_at";
+				}
+				if ($record->updated_at != 0)
+				{
+					$update .= ", `updated_at`=$record->updated_at";
+				}
+			}
+			$string = "INSERT INTO `$this->prefix" . "fights` SET ";
+			$string .= "`id`=$record->id, ";
+			$string .= "`eventId`=$record->eventId, ";
+			$string .= "`fightGroup`=$record->fightGroup, ";
+			$string .= "`fightRound`=$record->fightRound, ";
+			$string .= "`fightBracket`='$record->fightBracket', ";
+			$string .= "`fightNo`=$record->fightNo, ";
+			$string .= "`robot1Id`=$record->robot1Id, ";
+			$string .= "`robot2Id`=$record->robot2Id, ";
+			$string .= "`winnerId`=$record->winnerId, ";
+			$string .= "`loserId`=$record->loserId, ";
+			$string .= "`winnerNextFight`=$record->winnerNextFight, ";
+			$string .= "`loserNextFight`=$record->loserNextFight, ";
+			$string .= $createdAt;
+			$string .= $updatedAt;
+			$string .= "`sequence`=$record->sequence";
+			$string .= $update . ";\n";
+			fwrite($this->fileHandle, $string);
+		}
+		fclose($this->fileHandle);
+	}
+
+	public function importFile($fileName)
+	{
+		if (file_exists(Yii::$app->params['execPath']))
+		{
+			// run mysql with $fileName as input
+			if ($this->password !== '')
+			{
+				$cmd = "-h localhost -u $this->username -p $this->password $this->database < \"$fileName\"";
+			}
+			else
+			{
+				$cmd = "-h localhost -u $this->username $this->database < \"$fileName\"";
+			}
+			if (PHP_OS == 'WINNT' || PHP_OS == 'WIN32')
+			{
+				exec('start /b "Title" "' . Yii::$app->params['execDrive'] . Yii::$app->params['execPath'] . '" ' . $cmd);
+			}
+			else
+			{
+				pclose(popen('mysql ' . $cmd . '> /dev/null &', 'r'));
+			}
+			$entrants = Entrant::find()
+				->joinWith('event')
+				->where(['status' => -1])
+				->andWhere(['like', 'state', 'Complete'])
+				->all();
+			foreach ($entrants as $entrant)
+			{
+				$entrant->delete();
+			}
+			return true;
+		}
+		else
+		{
+			// mysql.exe is not where it should be! Generate an error message
+			return false;
+		}
+	}
+
+	public function fileDownload()
+	{
+		$fileSize  = filesize($this->filename);
+		$pathInfo = pathinfo($this->filename);
+		$fileName = $pathInfo['basename'];
+		$file = @fopen($this->filename,"rb");
+		if ($file)
+		{
+			header("Pragma: public");
+			header("Expires: -1");
+			header("Cache-Control: public, must-revalidate, post-check=0, pre-check=0");
+			header("Content-Disposition: attachment; filename=\"$fileName\"");
+			header("Content-Type: application/octet-stream");
+			header("Content-Length: $fileSize");
+			set_time_limit(0);
+			while(!feof($file))
+			{
+				print(@fread($file, 1024*8));
+				ob_flush();
+				flush();
+				if (connection_status()!=0)
+				{
+					@fclose($file);
+					unlink($this->filename);
+					exit;
+				}
+			}
+			@fclose($file);
+			unlink($this->filename);
+			return;
+		}
+		else
+		{
+			header("HTTP/1.0 500 Internal Server Error");
+			exit;
+		}
+	}
+
+	/**
+	 * Function to escape string so that is can be used in SQL query
+	 * @param string $string
+	 * @return string
+	 */
+	private function escapeString($string)
+	{
+		$retVal = str_replace(["'", '\\'], ["''", '\\\\'], $string);
+		return $retVal;
+	}
+}<?php
+
+namespace app\models;
+
+use Yii;
+
+/**
+ * This is the model class for table "{{%double_elim}}".
+ *
+ * @property string $id
+ * @property integer $fightGroup
+ * @property integer $fightRound
+ * @property string $fightBracket
+ * @property integer $fightNo
+ * @property integer $robot1Id
+ * @property integer $robot2Id
+ * @property integer $winnerId
+ * @property integer $loserId
+ * @property string $winnerNextFight
+ * @property string $loserNextFight
+ * @property integer $sequence
+ *
+ * @property Robot $robot1
+ * @property Robot $robot2
+ * @property Robot $winner
+ * @property Robot $loser
+ */
+class DoubleElim extends \yii\db\ActiveRecord
+{
+    /**
+     * @inheritdoc
+     */
+    public static function tableName()
+    {
+        return '{{%double_elim}}';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['fightGroup', 'fightRound', 'fightBracket', 'fightNo', 'winnerNextFight', 'loserNextFight'], 'required'],
+            [['fightGroup', 'fightRound', 'fightNo', 'robot1Id', 'robot2Id', 'winnerId', 'loserId', 'winnerNextFight', 'loserNextFight', 'sequence'], 'integer'],
+            [['fightBracket'], 'string']
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function attributeLabels()
+    {
+        return [
+            'id' => 'ID',
+            'fightGroup' => 'Fight Group',
+            'fightRound' => 'Fight Round',
+            'fightBracket' => 'Fight Bracket',
+            'fightNo' => 'Fight No',
+            'robot1Id' => 'Robot1 ID',
+            'robot2Id' => 'Robot2 ID',
+            'winnerId' => 'Winner ID',
+            'loserId' => 'Loser ID',
+            'winnerNextFight' => 'Winner Next Fight',
+            'loserNextFight' => 'Loser Next Fight',
+            'sequence' => 'Sequence',
+        ];
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getRobot1()
+    {
+        return $this->hasOne(Robot::className(), ['id' => 'robot1Id']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getRobot2()
+    {
+        return $this->hasOne(Robot::className(), ['id' => 'robot2Id']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getWinner()
+    {
+        return $this->hasOne(Robot::className(), ['id' => 'winnerId']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getLoser()
+    {
+        return $this->hasOne(Robot::className(), ['id' => 'loserId']);
+    }
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\behaviors\TimestampBehavior;
+use yii\db\ActiveRecord;
+
+/**
+ * This is the model class for table "{{%entrant}}".
+ *
+ * @property string $id
+ * @property string $eventId
+ * @property string $robotId
+ * @property string $teamId
+ * @property integer $teamSize
+ * @property integer $status
+ * @property integer $group
+ *
+ * @property Event $event
+ * @property Robot $robot
+ * @property Team $team
+ */
+class Entrant extends ActiveRecord
+{
+    /**
+     * @inheritdoc
+     */
+    public function behaviors()
+    {
+        return
+		[
+            TimestampBehavior::className(),
+        ];
+    }
+
+	/**
+     * @inheritdoc
+     */
+    public static function tableName()
+    {
+        return '{{%entrant}}';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['eventId', 'robotId'], 'required'],
+            [['eventId', 'robotId', 'status'], 'integer'],
+        	['robotId', 'compare', 'compareValue' => 0, 'operator' => '>', 'message' => 'You must select a robot'],
+        	['robotId', 'validateRobot'],
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function attributeLabels()
+    {
+        return [
+            'id' => 'ID',
+            'eventId' => 'Event',
+            'robotId' => 'Robot',
+            'status' => 'Status',
+        ];
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getEvent()
+    {
+        return $this->hasOne(Event::className(), ['id' => 'eventId']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getRobot()
+    {
+        return $this->hasOne(Robot::className(), ['id' => 'robotId']);
+    }
+
+    public function getUser()
+    {
+    	return $this->hasOne(User::className(), ['id' => 'teamId'])->via('robot');
+    }
+
+    public function getTeamName()
+    {
+    	return $this->robot->team->team_name;
+    }
+
+	/**
+	 * Return true if entrant may be edited/deleted (event is in Registration state)
+	 * @param integer $id
+	 * @return boolean
+	 */
+	public function isEditable($id)
+	{
+		$model = Event::findOne($id);
+		return ($model->state == 'Registration') ? true : false;
+	}
+
+	/**
+	 * Set group numbers of entrants for current event
+	 * @param integer $id The id of the current event
+	 * @param array $groupList Array of groups, each element is an array of entrant IDs
+	 */
+	public function setGroups($id, $groupList)
+	{
+		Yii::trace('Entering ' . __METHOD__);
+		foreach ($groupList as $group => $entrants)
+		{
+			$groupNum = $group + 1;
+			foreach ($entrants as $entrantId)
+			{
+				$command = Yii::$app->db->createCommand("UPDATE {{%entrant}}
+					SET `group_num` = $groupNum
+					WHERE `id` = $entrantId");
+				$command->execute();
+			}
+		}
+		Yii::trace('Leaving ' . __METHOD__);
+	}
+
+	/**
+	 * function to ensure a robot can only enter an event once
+	 */
+	public function validateRobot($attribute, $params)
+	{
+		if (Entrant::find()->andWhere(['eventId' => $this->eventId])
+			->andWhere(['robotId' => $this->robotId])
+			->count() > 0)
+		{
+			$this->addError($attribute, 'The selected robot is aready entered into the current event');
+		}
+	}
+
+	/**
+	 * function to check that all signed-up robots have been entered by the admin
+	 * e.g. passed tech checks
+	 */
+	public static function checkEntries($eventId)
+	{
+		return (Entrant::find()->andWhere(['eventId' => $eventId])
+			->andWhere(['status' => -1])
+			->count() == 0);
+	}
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\base\Model;
+use yii\data\ActiveDataProvider;
+use app\models\Entrant;
+use app\models\Event;
+use app\models\Robot;
+
+/**
+ * EntrantSearch represents the model behind the search form about `app\models\Entrant`.
+ */
+class EntrantSearch extends Entrant
+{
+	public $teamName;
+
+	public function attributes()
+	{
+		return array_merge(parent::attributes(), ['event.name', 'robot.team.team_name', 'robot.name']);
+	}
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['id', 'eventId', 'robotId'], 'integer'],
+            [['event.name', 'teamName', 'robot.name', 'status'], 'safe'],
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function scenarios()
+    {
+        // bypass scenarios() implementation in the parent class
+        return Model::scenarios();
+    }
+
+    /**
+     * Creates data provider instance with search query applied
+     *
+     * @param array $params
+     *
+     * @return ActiveDataProvider
+     */
+    public function search($params)
+    {
+        $query = Entrant::find();
+        $query->joinWith(['event', 'robot', 'user']);
+        if ($params['eventId'] !== NULL)
+        {
+        	$query->andFilterWhere([
+        		'eventId' => $params['eventId'],
+        	]);
+        }
+
+        $dataProvider = new ActiveDataProvider([
+            'query' => $query,
+        ]);
+
+		$dataProvider->sort->attributes['teamName'] =
+		[
+			'asc' => ['{{%user}}.team_name' => SORT_ASC],
+			'desc' => ['{{%user}}.team_name' => SORT_DESC],
+		];
+
+		$dataProvider->sort->attributes['robot.name'] =
+		[
+			'asc' => ['{{%robot}}.name' => SORT_ASC],
+			'desc' => ['{{%robot}}.name' => SORT_DESC],
+		];
+
+		$dataProvider->sort->attributes['status'] =
+		[
+			'asc' => ['{{%entrant}}.status' => SORT_ASC],
+			'desc' => ['{{%entrant}}.status' => SORT_DESC],
+		];
+
+        $this->load($params);
+
+        if (!$this->validate()) {
+            // uncomment the following line if you do not want to any records when validation fails
+             $query->where('0=1');
+            return $dataProvider;
+        }
+
+        $query->andFilterWhere([
+            'id' => $this->id,
+			'robotId' => $this->robotId,
+        ]);
+
+		$query->andFilterWhere(['{{%user}}.id' => $this->teamName]);
+		$query->andFilterWhere(['like', '{{%robot}}.name', $this->getAttribute('robot.name')]);
+		$query->andFilterWhere(['like', '{{%entrant}}.status', $this->status]);
+
+        return $dataProvider;
+    }
+
+}<?php
+
+namespace app\models;
+
+use Yii;
+use yii\base\Model;
+
+/**
+ * EntryForm is the model behind the example form.
+ */
+class EntryForm extends Model
+{
+    public $name;
+    public $email;
+
+    /**
+     * @return array the validation rules.
+     */
+    public function rules()
+    {
+        return [
+            // name and email are required
+            [['name', 'email'], 'required'],
+            // email has to be a valid email address
+            ['email', 'email'],
+        ];
+    }
+}
+<?php
+namespace app\models;
+
+use Yii;
+use yii\helpers\VarDumper;
+use yii\behaviors\TimestampBehavior;
+use app\models\Robot;
+use app\models\Entrant;
+use app\models\Fights;
+use app\models\User;
+use app\models\ProgressBar;
+
+/**
+ * This is the model class for table "{{%event}}".
+ *
+ * @property string $id
+ * @property string $name
+ * @property integer $eventDate
+ * @property string $state
+ * @property integer $classId
+ * @property integer $offset
+ * @property integer $eventType
+ * @property integer $num_groups
+ * @property integer $created_at
+ * @property integer $updated_at
+ * @property integer $organiserId
+ * @property string $venue
+ *
+ * @property Entrant[] $entrants
+ * @property RobotClass $class
+ */
+class Event extends \yii\db\ActiveRecord
+{
+
+	/**
+	 * @inheritdoc
+	 */
+	public static function tableName()
+	{
+		return '{{%event}}';
+	}
+
+	/**
+	 * @inheritdoc
+	 */
+	public function rules()
+	{
+		return
+		[
+			[['name', 'classId', 'eventDate', 'organiserId'], 'required'],
+			[['classId', 'organiserId'], 'integer'],
+			[['eventDate'], 'date', 'format' => 'yyyy-mm-dd'],
+			[['state'], 'string'],
+			['state', 'default', 'value' => 'Registration'],
+			[['name'], 'string', 'max' => 100],
+			[['venue'], 'string', 'max' => 65535],
+		];
+	}
+
+	/**
+	 * @inheritdoc
+	 */
+	public function behaviors()
+	{
+		return
+		[
+			TimestampBehavior::className(),
+		];
+	}
+
+	/**
+	 * function to generate an array to populate a dropdown list of all the events in the table
+	 */
+	public static function dropdown()
+	{
+		$models = static::find()->all();
+		foreach ($models as $model)
+		{
+			$dropdown[$model->id] = $model->name;
+		}
+		return $dropdown;
+	}
+
+	/**
+	 * function to set up event and generate corresponding fights
+	 *
+	 * @param string $key
+	 * @param integer $id
+	 * @param array $teams
+	 * @param integer $numEntrants
+	 */
+	public function setupEvent($key, $redirect, $id, $teams, $numEntrants)
+	{
+		$fights = new Fights();
+		$entrantModel = new Entrant();
+		$progress = new ProgressBar($key);
+
+		$progress->start(6 + count($teams), $redirect);
+
+		/* calculate required size of each group */
+		$maxTeamSize = count(reset($teams));
+		if ($maxTeamSize <= 2 && $numEntrants < 32)
+		{
+			$numGroups = 2;
+		}
+		else
+		{
+			if ($maxTeamSize <= 4 && $numEntrants < 64)
+			{
+				$numGroups = 4;
+			}
+			else
+			{
+				$numGroups = 8;
+			}
+		}
+		/* assign robots to groups */
+		$retVal = $this->assignGroups($teams, $numEntrants, $numGroups, $progress);
+		if ($retVal[0] == 1)
+		{
+			/* can't fit team in remaining groups */
+			$progress->stop('Team size is bigger than number of spaces available. Try re-doing the draw.');
+		}
+		else
+		{
+			$progress->inc();
+			$entrants = $retVal[1];
+
+			/* create an array of robots per group */
+			$groupList = array();
+			foreach ($entrants as $robot => $group)
+			{
+				$groupList[$group][] = $robot;
+			}
+			$progress->inc();
+			/* add a new set of fights to the fights table */
+			$fights->insertDoubleElimination($id);
+			$progress->inc();
+			$offset = $fights->setupEvent($id, $groupList);
+			$progress->inc();
+			$entrantModel->setGroups($id, $groupList);
+			$progress->inc();
+			/* ready to start! */
+			$setupOK = $this->stateReady($id, $offset, $numGroups);
+			if ($setupOK == false)
+			{
+				Yii::$app->getSession()->setFlash('error', 'Failed to save Ready state to event model.');
+			}
+			$progress->inc();
+			$progress->complete();
+		}
+		return;
+	}
+
+	/**
+	 * function to assign robots to groups
+	 * return array mapping each robot to its group
+	 *
+	 * @param array $teams
+	 * @param integer $numGroups
+	 * @param integer $numEntrants
+	 * @param ProgressBar $progress
+	 * @return array $entrants
+	 */
+	private function assignGroups($teams, $numEntrants, $numGroups, $progress)
+	{
+		$groupSize = intval($numEntrants / $numGroups);
+		$remainder = $numEntrants % $numGroups;
+		/* create group arrays */
+		for ($i = 1; $i <= $numGroups; $i ++)
+		{
+			$groupArray[$i - 1] = [
+				'size' => $groupSize + (($i <= $remainder) ? 1 : 0),
+				'free' => $groupSize + (($i <= $remainder) ? 1 : 0),
+				'robots' => array()
+			];
+		}
+		/* assign robots to groups - this can fail to find a solution! */
+		$teamGroups = array();
+		// return $this->actionDebug($id, '$groupArray', $groupArray);
+
+		foreach ($teams as $team => $robots)
+		{
+			/* calculate array of groups with free slots */
+			unset($temp);
+			$temp = array();
+			for ($i = 0; $i < $numGroups; $i ++)
+			{
+				if ($groupArray[$i]['free'] > 0)
+				{
+					$temp[$i] = $groupArray[$i]['free'];
+				}
+			}
+			$freeGroups = array_keys($temp);
+			shuffle($freeGroups);
+			if (count($robots) > count($freeGroups))
+			{
+				/* can't fit team in remaining groups */
+				return [
+					1,
+					NULL
+				];
+			}
+			$i = 0;
+			foreach ($robots as $robot)
+			{
+				/* give each robot a group number */
+				$groupNum = $freeGroups[$i];
+				$entrants[$robot] = $groupNum;
+				$groupArray[$groupNum]['free'] -= 1;
+				$i ++;
+			}
+			$progress->inc();
+		}
+		return [
+			0,
+			$entrants
+		];
+	}
+
+	/**
+	 * function to set event state to "Closed"
+	 */
+	public function stateClosed()
+	{
+		$retval = false;
+		$events = $this->find()
+			->where(['organiserId' => Yii::$app->user->identity->id])
+			->andWhere(['state' => 'Registration'])
+			->all();
+		foreach($events as $event)
+		{
+			$event->state = 'Closed';
+			$event->update();
+			$retval = true;
+		}
+		return $retval;
+	}
+
+	/**
+	 * function to set event state to "Setup"
+	 */
+	public function stateSetup($id)
+	{
+		$event = $this->findOne($id);
+		$event->state = 'Setup';
+		return $event->update();
+	}
+
+	/**
+	 * function to set event state to "Ready"
+	 */
+	public function stateReady($id, $offset, $numGroups)
+	{
+		$event = $this->findOne($id);
+		$event->state = 'Ready';
+		$event->offset = $offset;
+		$event->num_groups = $numGroups;
+		return $event->update();
+	}
+
+	/**
+	 * function to set event state to "Running"
+	 */
+	public function stateRunning($id)
+	{
+		$event = $this->findOne($id);
+		$event->state = 'Running';
+		return $event->update();
+	}
+
+	/**
+	 * function to set event state to "Registration"
+	 */
+	public function stateRegistration($id)
+	{
+		$event = $this->findOne($id);
+		$event->state = 'Registration';
+		return $event->update();
+	}
+
+	/**
+	 * function to set event state to "Complete"
+	 */
+	public function stateComplete($id)
+	{
+		$event = $this->findOne($id);
+		$event->state = 'Complete';
+		return $event->update();
+	}
+	/**
+	 * function to get teams (and their robots) for an event
+	 * returns an array where the keys are team IDs and each element is
+	 * an array of entrant IDs
+	 */
+	public static function getTeams($id)
+	{
+		$teams = array();
+		$event = static::findOne($id);
+		$entrants = $event->entrants;
+		foreach ($entrants as $entrant)
+		{
+			$teams[$entrant->robot->teamId][] = $entrant->id;
+		}
+		uasort($teams, [
+			'self',
+			'compareSize'
+		]);
+		return $teams;
+	}
+
+	/**
+	 * Return true if event has no entrants (so may be deleted)
+	 *
+	 * @param integer $id
+	 * @return boolean
+	 */
+	public function isOKToDelete($id)
+	{
+		return Entrant::find()->where([
+			'eventId' => $id
+		])->count() > 0 ? false : true;
+	}
+
+	public static function getPosition($finalFight, $eventId)
+	{
+		$event = Event::findOne($eventId);
+		$eventType = $event->eventType;
+		$numGroups = $event->num_groups;
+
+		switch ($eventType)
+		{
+			case 1:	// double elimination
+				$position = static::getPosDE($finalFight);
+				break;
+			default:
+				$position = '';
+				break;
+		}
+		return $position;
+	}
+
+	/**
+	 * @inheritdoc
+	 */
+	public function attributeLabels()
+	{
+		return [
+			'id' => 'ID',
+			'name' => 'Event',
+			'eventDate' => 'Date',
+			'state' => 'State',
+			'classId' => 'Class ID'
+		];
+	}
+
+	/**
+	 *
+	 * @return \yii\db\ActiveQuery
+	 */
+	public function getEntrants()
+	{
+		return $this->hasMany(Entrant::className(), [
+			'eventId' => 'id'
+		]);
+	}
+
+	/**
+	 *
+	 * @return \yii\db\ActiveQuery
+	 */
+	public function getClass()
+	{
+		return $this->hasOne(RobotClass::className(), [
+			'id' => 'classId'
+		]);
+	}
+
+	/**
+	 *
+	 * @return \yii\db\ActiveQuery
+	 */
+	public function getOrganiser()
+	{
+		return $this->hasOne(User::className(), [
+			'id' => 'organiserId'
+		]);
+	}
+
+	/**
+	 * function to sort size of arrays in descending order
+	 */
+	private static function compareSize($a, $b)
+	{
+		$countA = count($a);
+		$countB = count($b);
+		if ($countA == $countB)
+		{
+			return 0;
+		}
+		else
+		{
+			return ($countA > $countB) ? - 1 : 1;
+		}
+	}
+
+	private static function getPosDE($finalFight)
+	{
+		switch ($finalFight)
+		{
+			case 256:
+				$position = '1st';
+				break;
+			case 255:
+			case 254:
+				$position = '2nd';
+				break;
+			case 253:
+				$position = '3rd';
+				break;
+			case 252:
+				$position = '4th';
+				break;
+			case 251:
+			case 250:
+				$position = 'Joint 5th';
+				break;
+			case 249:
+			case 248:
+				$position = 'Joint 7th';
+				break;
+			case 243:
+			case 244:
+			case 245:
+			case 246:
+				$position = 'Joint 9th';
+				break;
+			case 237:
+			case 238:
+			case 239:
+			case 240:
+				$position = 'Joint 13th';
+				break;
+			default:
+				$position = '';
+				break;
+		}
+		return $position;
+	}
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\base\Model;
+use yii\data\ActiveDataProvider;
+use app\models\Event;
+
+/**
+ * EventSearch represents the model behind the search form about `app\models\Event`.
+ */
+class EventSearch extends Event
+{
+	public function attributes()
+	{
+		return array_merge(parent::attributes(), ['class.name']);
+	}
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['id', 'classId'], 'integer'],
+            [['name', 'class.name', 'eventDate'], 'safe'],
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function scenarios()
+    {
+        // bypass scenarios() implementation in the parent class
+        return Model::scenarios();
+    }
+
+    /**
+     * Creates data provider instance with search query applied
+     *
+     * @param array $params
+     *
+     * @return ActiveDataProvider
+     */
+    public function search($params)
+    {
+        $query = Event::find();
+
+        $dataProvider = new ActiveDataProvider([
+            'query' => $query,
+        	'sort'=> ['defaultOrder' => ['eventDate'=>SORT_DESC]]
+        ]);
+
+		$dataProvider->sort->attributes['class.name'] = [
+			'asc' => ['{{%robot_class}}.name' => SORT_ASC],
+			'desc' => ['{{%robot_class}}.name' => SORT_DESC],
+		];
+
+		$query->joinWith(['class']);
+
+        $this->load($params);
+
+        if (!$this->validate()) {
+            // uncomment the following line if you do not want to any records when validation fails
+            // $query->where('0=1');
+            return $dataProvider;
+        }
+
+        $query->andFilterWhere([
+            'id' => $this->id,
+             'classId' => $this->classId,
+        ]);
+
+        $query->andFilterWhere(['like', '{{%event}}.name', $this->name]);
+
+		$query->andFilterWhere(['like', '{{%robot_class}}.name', $this->getAttribute('class.name')]);
+
+        return $dataProvider;
+    }
+
+}<?php
+
+namespace app\models;
+
+use Yii;
+use yii\behaviors\TimestampBehavior;
+use yii\db\ActiveRecord;
+use app\models\Event;
+use app\models\Entrant;
+
+/**
+ * This is the model class for table "{{%fights}}".
+ *
+ * @property string $id
+ * @property integer $eventId
+ * @property integer $fightGroup
+ * @property integer $fightRound
+ * @property string $fightBracket
+ * @property integer $fightNo
+ * @property integer $robot1Id
+ * @property integer $robot2Id
+ * @property integer $winnerId
+ * @property integer $loserId
+ * @property string $winnerNextFight
+ * @property string $loserNextFight
+ * @property integer $sequence
+ *
+ * @property Robot $robot1
+ * @property Robot $robot2
+ * @property Robot $winner
+ * @property Robot $loser
+ */
+class Fights extends ActiveRecord
+{
+	protected $_startMap = [
+		[1, 9, 17, 25, 33, 41, 49, 57, 'robot1Id'],
+		[2, 10, 18, 26, 34, 42, 50, 58, 'robot1Id'],
+		[3, 11, 19, 27, 35, 43, 51, 59, 'robot1Id'],
+		[4, 12, 20, 28, 36, 44, 52, 60, 'robot1Id'],
+		[5, 13, 21, 29, 37, 45, 53, 61, 'robot1Id'],
+		[6, 14, 22, 30, 38, 46, 54, 62, 'robot1Id'],
+		[7, 15, 23, 31, 39, 47, 55, 63, 'robot1Id'],
+		[8, 16, 24, 32, 40, 48, 56, 64, 'robot1Id'],
+		[1, 9, 17, 25, 33, 41, 49, 57, 'robot2Id'],
+		[2, 10, 18, 26, 34, 42, 50, 58, 'robot2Id'],
+		[3, 11, 19, 27, 35, 43, 51, 59, 'robot2Id'],
+		[4, 12, 20, 28, 36, 44, 52, 60, 'robot2Id'],
+		[5, 13, 21, 29, 37, 45, 53, 61, 'robot2Id'],
+		[6, 14, 22, 30, 38, 46, 54, 62, 'robot2Id'],
+		[7, 15, 23, 31, 39, 47, 55, 63, 'robot2Id'],
+		[8, 16, 24, 32, 40, 48, 56, 64, 'robot2Id'],
+	];
+
+    /**
+     * @inheritdoc
+     */
+    public static function tableName()
+    {
+        return '{{%fights}}';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function behaviors()
+    {
+    	return
+    	[
+    		TimestampBehavior::className(),
+    	];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['eventId', 'fightGroup', 'fightRound', 'fightBracket', 'fightNo', 'winnerNextFight', 'loserNextFight'], 'required'],
+            [['eventId', 'fightGroup', 'fightRound', 'fightNo', 'robot1Id', 'robot2Id', 'winnerId', 'loserId', 'winnerNextFight', 'loserNextFight', 'sequence'], 'integer'],
+            [['fightBracket'], 'string']
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function attributeLabels()
+    {
+        return [
+            'id' => 'ID',
+			'eventId' => 'Event ID',
+            'fightGroup' => 'Fight Group',
+            'fightRound' => 'Fight Round',
+            'fightBracket' => 'Fight Bracket',
+            'fightNo' => 'Fight No',
+            'robot1Id' => 'Robot1 ID',
+            'robot2Id' => 'Robot2 ID',
+            'winnerId' => 'Winner ID',
+            'loserId' => 'Loser ID',
+            'winnerNextFight' => 'Winner Next Fight',
+            'loserNextFight' => 'Loser Next Fight',
+            'sequence' => 'Sequence',
+        ];
+    }
+
+    /**
+     * Check whether it is OK to change the result of a fight
+     * @param string $id
+     * @return boolean
+     */
+    public function isOKToChange($id)
+    {
+    	$record = $this->findOne($id);
+    	$winnerNext = $record->winnerNextFight + $id;
+    	$loserNext = $record->loserNextFight + $id;
+    	$retVal = $this->checkRecord($winnerNext);
+    	if (strpos($retVal, 'OK') === 0)
+    	{
+    		if ($record->loserNextFight != 0)
+    		{
+    			$retVal = $this->checkRecord($loserNext);
+    		}
+    	}
+   		return $retVal . ' ' . $winnerNext . ' ' . $loserNext;
+	}
+
+    public function checkRecord($id)
+    {
+    	$record = $this->findOne($id);
+    	if ($record->winnerId == -1)
+    	{
+    		// next fight is OK
+    		return 'OK ' . $id . ' ' . $record->winnerId . ' ' . $record->loserId;
+    	}
+    	else if ($record->loserId == 0)
+    	{
+    		// next fight is a bye so go on to the next fight
+    		return $this->checkRecord($record->winnerNextFight + $id);
+    	}
+    	else
+    	{
+    		// next fight is not OK so can't change result
+    		return 'Bad ' . $id . ' ' . $record->winnerId . ' ' . $record->loserId;
+    	}
+    }
+
+    /**
+     * function to set the current field of a record to true to indicate that the fight is in progress
+     * @param integer $id
+     *
+     */
+    public function startFight($id)
+    {
+    	$record = $this->findOne($id);
+    	$record->current = filter_var(TRUE, FILTER_VALIDATE_BOOLEAN);
+    	$record->update();
+    }
+
+    /**
+     * function to set the current field of a record to false to indicate that the fight has ended
+     * @param integer $id
+     */
+    public function endFight($id)
+    {
+    	$record = $this->findOne($id);
+    	$record->current = filter_var(FALSE, FILTER_VALIDATE_BOOLEAN);
+    	$record->update();
+    }
+
+    /**
+     * function to update the current fight, then call further functions to
+     * update subsequent fights and run byes
+     * @param integer $id
+     * @param integer $winner
+     * @param integer $showComplete
+     * @param string $change - optional, if true change existing result
+     * @return multitype:string unknown |multitype:string NULL |multitype:string number NULL
+     */
+    public function updateCurrent($id, $winner, $showComplete, $change = false, $replacement = 0)
+    {
+    	$record = $this->findOne($id);
+    	if ($change === true)
+    	{
+    		$loser = $winner;
+    		$winner = $replacement;
+    	}
+    	else
+    	{
+    		if ($winner == $record->robot1->id)
+    		{
+    			$loser = $record->robot2->id;
+    		}
+    		else if ($winner == $record->robot2->id)
+    		{
+    			$loser = $record->robot1->id;
+    		}
+    		else
+    		{
+    			$error = "Winner = $winner but does not match Robot1 $record->robot1->id or Robot2 $record->robot2->id";
+    			return ['/site/debug', 'class' => __CLASS__, 'function' => __FUNCTION__, 'name' => 'ERROR', 'value' => $error];
+    		}
+    	}
+    	$record->winnerId = $winner;
+    	$record->loserId = $loser;
+    	// Calculate and insert sequence number
+		$sequence = $this->find()
+		   ->where(['eventId' => $record->eventId])
+		   ->andWhere(['>=', 'sequence', 0])
+		   ->count();
+    	$record->sequence = $sequence;
+    	$record->update();
+
+    	$fightLoser = Entrant::findOne($loser);
+    	$fightWinner = Entrant::findOne($winner);
+    	$error = false;
+    	if ($record->fightBracket == 'W' && $change == false)
+    	{
+    		if ($fightWinner->status != 2)
+    		{
+    			Yii::info("ID: $fightWinner->id, Bracket = Winners but Status = $fightWinner->status", __METHOD__);
+    			$fightWinner->status = 2;
+    			$fightWinner->save(false, ['status']);
+    			$error = true;
+    		}
+    		if ($fightLoser->status != 2)
+    		{
+    			Yii::info("ID: $fightLoser->id, Bracket = Winners but Status = $fightLoser->status", __METHOD__);
+    			$fightLoser->status = 2;
+    			$fightLoser->save(false, ['status']);
+     			$error = true;
+    		}
+    	}
+		else if ($record->fightBracket == 'L' && $change == false)
+		{
+			if ($fightWinner->status != 1)
+			{
+    			Yii::info("ID: $fightWinner->id, Bracket = Losers but Status = $fightWinner->status", __METHOD__);
+				$fightWinner->status = 1;
+				$fightWinner->save(false, ['status']);
+				$error = true;
+			}
+			if ($fightLoser->status != 1)
+			{
+    			Yii::info("ID: $fightLoser->id, Bracket = Losers but Status = $fightLoser->status", __METHOD__);
+				$fightLoser->status = 1;
+				$fightLoser->save(false, ['status']);
+				$error = true;
+			}
+		}
+
+    	$finished = true;
+    	if ($record->winnerNextFight > 0)
+    	{
+    		if (($record->fightBracket == 'F') && ($fightLoser->status == 1))
+    		{
+    			/* first final fight, no need for a rematch, make the second final a bye */
+    			$this->updateNext($record->id, $record->winnerNextFight, $record->winnerId, $change, 0);
+    			$this->updateNext($record->id, $record->loserNextFight, 0, $change, $record->loserId);
+    		}
+    		else
+    		{
+    			$finished = false;
+    			$this->updateNext($record->id, $record->winnerNextFight, $record->winnerId, $change, $record->loserId);
+    			$this->updateNext($record->id, $record->loserNextFight, $record->loserId, $change, $record->winnerId);
+    		}
+     		if ($change === false)
+    		{
+    			do
+    			{
+    				$status = $this->runByes($record->eventId);
+    			} while ($status == true);
+    		}
+    		else
+    		{
+    			$id = $record->id;
+    			do
+    			{
+    				$id = $this->changeByes($record->eventId, $record->winnerId, $record->loserId, $id);
+    			} while ($id > 0);
+       		}
+    	}
+    	if ($record->save())
+    	{
+    		$event = Event::findOne($record->eventId);
+    		$fightLoser->status -= 1;
+    		if ($fightLoser->status == 0)
+    		{
+    			$fightLoser->finalFightId = $record->id - $event->offset;
+    		}
+    		$fightLoser->touch('updated_at');
+    		$fightLoser->save(false, ['status', 'finalFightId']);
+    		if ($change === true)
+    		{
+    			$fightWinner = Entrant::findOne($winner);
+    			$fightWinner->status += 1;
+    			$fightWinner->finalFightId = 0;
+    			$fightWinner->touch('updated_at');
+    			$fightWinner->save(false, ['status', 'finalFightId']);
+    		}
+    		if ($finished)
+    		{
+    			$entrant = Entrant::findOne($winner);
+    			$entrant->finalFightId = 256;
+    			$entrant->touch('updated_at');
+    			$entrant->save(false, ['finalFightId']);
+    			/* update event state */
+    			$event->state = 'Complete';
+    			$event->update();
+    			//$event->save(false, ['state']);
+    			/* announce results! */
+    			return ['event/result', 'id' => $record->eventId];
+    		}
+    		else
+    		{
+    			if ($error)
+    			{
+    				Yii::$app->session->setFlash('error', 'Something went wrong with the robot tracking. It should be fixed now. Please send the fights.log file with the database updates.');
+    			}
+    			return ['index', 'eventId' => $record->eventId, 'byes' => 1, 'complete' => $showComplete];
+    		}
+    	}
+    	else
+    	{
+    		$error = "Failed to save model to database";
+    		return ['/site/debug', 'class' => __CLASS__, 'function' => __FUNCTION__, 'name' => 'ERROR', 'value' => $error];
+    	}
+    }
+	/**
+	 * function to run byes
+	 * @param integer $eventId
+	 * @return boolean true if a bye was found and run
+	 */
+	public function runByes($eventId)
+	{
+		$status = false;
+		$record = $this->find()
+			->where(['eventId' => $eventId, 'robot1Id' => 0, 'winnerId' => -1])
+			->andWhere(['>=', 'robot2Id', 0])
+			->orderBy('id')
+			->one();
+		if ($record != NULL)
+		{
+			$winner = $record->robot2Id;
+			$loser = $record->robot1Id;
+		}
+		else
+		{
+			$record = $this->find()
+				->where(['eventId' => $eventId, 'robot2Id' => 0, 'winnerId' => -1])
+				->andWhere(['>=', 'robot1Id', 0])
+				->orderBy('id')
+				->one();
+			if ($record != NULL)
+			{
+				$winner = $record->robot1Id;
+				$loser = $record->robot2Id;
+			}
+		}
+		if ($record != NULL)
+		{
+			$record->winnerId = $winner;
+			$record->loserId = $loser;
+			// Calculate and insert sequence number
+			$sequence = $this->find()
+			   ->where(['eventId' => $eventId])
+	   			->andWhere(['>=', 'sequence', 0])
+			   ->count();
+			$record->sequence = $sequence++;
+			$record->update();
+			$status = $this->updateNext($record->id, $record->winnerNextFight, $record->winnerId);
+			if ($status == true)
+			{
+				$status = $this->updateNext($record->id, $record->loserNextFight, $record->loserId);
+			}
+		}
+		return $status;
+	}
+
+	/**
+	 * function to change byes
+	 * @param $eventId integer
+	 * @param $winnerId integer
+	 * @param $loserId integer
+	 * @param $fightId integer
+	 */
+	public function changeByes($eventId, $winnerId, $loserId, $fightId)
+	{
+		// function needs to find fights where id > $record->id
+		// and ((robot1Id = 0 and robot2Id is in [winner_Id, loser_Id])
+		// or (robot2Id = 0 and robot1Id is in [winner_Id, loser_Id]))
+		// The and/or logic needs to be organised correctly...
+		$record = $this->find()
+			->where(['eventId' => $eventId])
+			->andWhere(['>', 'id', $fightId])
+			->andWhere(['or',
+				['robot1Id' => 0, 'robot2Id' => [$winnerId, $loserId]],
+				['robot2Id' => 0, 'robot1Id' => [$winnerId, $loserId]]])
+			->orderBy('id')
+			->one();
+		if ($record != NULL)
+		{
+			if (($record->robot1Id == $winnerId) || ($record->robot2Id == $winnerId))
+			{
+				$record->winnerId = $winnerId;
+				$replacement = $winnerId;
+				$original = $loserId;
+			}
+			else if (($record->robot1Id == $loserId) || ($record->robot2Id == $loserId))
+			{
+				$record->winnerId = $loserId;
+				$replacement = $loserId;
+				$original = $winnerId;
+			}
+			$record->update();
+			$status = $this->updateNext($record->id, $record->winnerNextFight, $replacement, true, $original);
+			if ($status == true)
+			{
+				$status = $this->updateNext($record->id, $record->loserNextFight, $replacement, true, $original);
+			}
+			return $record->id;
+		}
+		else
+		{
+			return 0;
+		}
+	}
+
+	/**
+	 * update record for winner's or loser's next fight
+	 */
+	public function updateNext($id, $nextFight, $robotId, $change = false, $original = 0)
+	{
+		$status = false;
+		if ($nextFight != 0)
+		{
+			$nextRecord = $this->findOne($id + $nextFight);
+			if ($nextRecord != NULL)
+			{
+				if ($change === false)
+				{
+					if ($nextRecord->robot1Id == -1)
+					{
+						$nextRecord->robot1Id = $robotId;
+					}
+					else if (($nextRecord->robot2Id == -1) && (($nextRecord->robot1Id != $robotId) || ($nextRecord->robot1Id == 0)))
+					{
+						$nextRecord->robot2Id = $robotId;
+					}
+				}
+				else
+				{
+					if ($nextRecord->robot1Id == $original)
+					{
+						$nextRecord->robot1Id = $robotId;
+					}
+					else if ($nextRecord->robot2Id == $original)
+					{
+						$nextRecord->robot2Id = $robotId;
+					}
+				}
+				$nextRecord->update();
+				$status = true;
+			}
+		}
+		else
+		{
+			/* there is no next fight so just skip and return true keep checking for fights */
+			$status = true;
+		}
+		return $status;
+	}
+
+	/**
+	 * function to put robot ids into fights table at start of event
+	 * @param integer $id
+	 * @param array $groupList
+	 * @return integer $offset offset into fights table for start of current event
+	 */
+	public function setupEvent($id, $groupList)
+	{
+		/* get offset of first fight for this event */
+		$record = $this->find()
+			->where(['eventId' => $id])
+			->orderBy('id')
+			->one();
+		$offset = $record->id - 1;
+		$sequence = 0;
+		foreach ($groupList as $groupNum => $group)
+		{
+			/* shuffle robots within groups */
+			shuffle($group);
+			/* put robot ids into fights table */
+			foreach ($group as $index => $robotId)
+			{
+				$fightId = $this->_startMap[$index][$groupNum] + $offset;
+				$column = $this->_startMap[$index][8];
+				$command = Yii::$app->db->createCommand("UPDATE {{%fights}}
+				   SET `$column` = $robotId, `sequence` = $sequence
+				   WHERE `id` = $fightId");
+				$command->execute();
+				$sequence++;
+			}
+		}
+		return $offset;
+	}
+	/**
+	 * inserts a set of double elimination fights into the table
+	 * @return integer (the offset into the fights table where this event starts)
+	 */
+	public function insertDoubleElimination($eventId)
+	{
+		$createTime = time();
+		$command = Yii::$app->db->createCommand("INSERT INTO {{%fights}} (`eventId`,`fightGroup`,`fightRound`,`fightBracket`,
+			`fightNo`,`robot1Id`,`robot2Id`,`winnerId`,`loserId`,`winnerNextFight`,`loserNextFight`, `created_at`, `updated_at`)
+			SELECT $eventId,`fightGroup`,`fightRound`,`fightBracket`,`fightNo`,`robot1Id`,`robot2Id`,`winnerId`,
+			`loserId`,`winnerNextFight`,`loserNextFight`, $createTime, $createTime
+			FROM {{%double_elim}}
+			WHERE `winnerId` = -1 ORDER BY `id`");
+		$command->execute();
+	}
+
+	/**
+	 * Create text label from round, group and bracket
+	 * @param ActiveRecord $model
+	 * @return string
+	 */
+	public static function labelRound($model)
+    {
+    	if ($model->fightRound == 15)
+    	{
+    		$retVal = "Final (replay)";
+		}
+    	else if ($model->fightRound == 14)
+    	{
+    		$retVal = "Final";
+		}
+    	else if ($model->fightRound == 13)
+    	{
+    		$retVal = "Third Place Play-off";
+		}
+    	else if ($model->fightGroup == 9)
+    	{
+    		$retVal = "Finals Round $model->fightRound, $model->fightBracket bracket";
+    	}
+    	else
+    	{
+    		if ($model->fightBracket == 'W')
+    		{
+    			$bracket = "Winners' bracket";
+    		}
+    		else
+    		{
+    			$bracket = "Losers' bracket";
+    		}
+    		$retVal = "Group $model->fightGroup Round $model->fightRound, $bracket";
+    	}
+    	return $retVal;
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getRobot1()
+    {
+        return $this->hasOne(Entrant::className(), ['id' => 'robot1Id'])->from(['robot1' => Entrant::tableName()]);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getRobot2()
+    {
+        return $this->hasOne(Entrant::className(), ['id' => 'robot2Id'])->from(['robot2' => Entrant::tableName()]);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getWinner()
+    {
+        return $this->hasOne(Entrant::className(), ['id' => 'winnerId']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getLoser()
+    {
+        return $this->hasOne(Entrant::className(), ['id' => 'loserId']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public static function getNextFights($id)
+    {
+    	return self::Find()->innerJoin('{{%event}} e', 'e.id = eventId')
+    	->leftJoin('{{%entrant}} n1', 'n1.id = robot1Id')
+    	->leftJoin('{{%entrant}} n2', 'n2.id = robot2Id')
+    	->leftJoin('{{%robot}} r1', 'r1.id = n1.robotId')
+    	->leftJoin('{{%robot}} r2', 'r2.id = n2.robotId')
+    	->leftJoin('{{%user}} u1', 'u1.id = r1.teamId')
+    	->leftJoin('{{%user}} u2', 'u2.id = r2.teamId')
+    	->where(['winnerId' => -1])
+    	->andWhere(['like', 'e.state', 'Running'])
+    	->andWhere(['or', "r1.teamId = $id", "r2.teamId = $id"]);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public static function getCompleteFights($event, $robot)
+    {
+    	return self::Find()->innerJoin('{{%event}} e', 'e.id = eventId')
+    	->leftJoin('{{%entrant}} n1', 'n1.id = robot1Id')
+    	->leftJoin('{{%entrant}} n2', 'n2.id = robot2Id')
+    	->leftJoin('{{%robot}} r1', 'r1.id = n1.robotId')
+    	->leftJoin('{{%robot}} r2', 'r2.id = n2.robotId')
+    	->leftJoin('{{%user}} u1', 'u1.id = r1.teamId')
+    	->leftJoin('{{%user}} u2', 'u2.id = r2.teamId')
+    	->where(['e.id' => $event])
+    	->andWhere(['>', 'winnerId', 0])
+    	->andWhere(['and', "robot1Id > 0", "robot2Id > 0"])
+    	->andWhere(['or', "n1.robotId = $robot", "n2.robotId = $robot"]);
+    }
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\base\Model;
+use yii\data\ActiveDataProvider;
+use app\models\Fights;
+
+/**
+ * FightsSearch represents the model behind the search form about `app\models\Fights`.
+ */
+class FightsSearch extends Fights
+{
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['id', 'fightGroup', 'fightRound', 'fightNo', 'robot1Id', 'robot2Id', 'winnerId', 'loserId', 'winnerNextFight', 'loserNextFight', 'sequence'], 'integer'],
+            [['fightBracket'], 'safe'],
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function scenarios()
+    {
+        // bypass scenarios() implementation in the parent class
+        return Model::scenarios();
+    }
+
+    /**
+     * Creates data provider instance with search query applied
+     *
+     * @param array $params
+     *
+     * @return ActiveDataProvider
+     */
+    public function search($params)
+    {
+        $query = Fights::find();
+
+        $dataProvider = new ActiveDataProvider([
+            'query' => $query,
+        	'sort'=> ['defaultOrder' => ['fightRound'=>SORT_ASC]],
+        ]);
+
+        $this->load($params);
+
+        if (!$this->validate()) {
+            // uncomment the following line if you do not want to any records when validation fails
+            // $query->where('0=1');
+            return $dataProvider;
+        }
+
+        $query->andFilterWhere([
+//            'id' => $this->id,
+//            'fightGroup' => $this->fightGroup,
+//            'fightRound' => $this->fightRound,
+//            'fightNo' => $this->fightNo,
+            'robot1Id' => $this->robot1Id,
+            'robot2Id' => $this->robot2Id,
+            'winnerId' => -1,
+            'loserId' => -1,
+//            'sequence' => $this->sequence,
+        ]);
+
+        $query->andFilterWhere(['eventId' => $this->eventId]);
+//        $query->andFilterWhere(['like', 'fightBracket', $this->fightBracket]);
+        $query->andFilterWhere(['>', 'robot1Id', 0]);
+        $query->andFilterWhere(['>', 'robot2Id', 0]);
+
+        return $dataProvider;
+    }
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\behaviors\TimestampBehavior;
+
+/**
+ * This is the model class for table "{{%lock}}".
+ *
+ * @property integer $id
+ * @property string $name
+ *
+ */
+class Lock extends \yii\db\ActiveRecord
+{
+    /**
+     * @inheritdoc
+     */
+    public static function tableName()
+    {
+        return '{{%lock}}';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['lockState', 'lockUserId', 'updated_at'], 'required']
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function attributeLabels()
+    {
+        return [
+            'lockState' => 'State',
+            'lockUserId' => 'User',
+        	'updated_at' => 'Time'
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function behaviors()
+    {
+    	return
+    	[
+    		TimestampBehavior::className(),
+    	];
+    }
+
+    public function lock($userId)
+    {
+    	// id is always 1
+    	// set lockState = 1, lockUserId = $userId, lockTime = now()
+		$record = $this->findOne(1);
+		$record->lockState = 1;
+		$record->lockUserId = $userId;
+		return $record->update(false);
+    }
+
+    public function unlock()
+    {
+    	// id is always 1
+    	// set lockState = 0, lockUserId = NULL, lockTime = now()
+		$record = $this->findOne(1);
+		$record->lockState = 0;
+		$record->lockUserId = NULL;
+		return $record->update(false);
+	}
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getUser()
+    {
+        return $this->hasOne(User::className(), ['lockUserId' => 'id']);
+    }
+
+    /**
+     * Return true if database is locked
+     * @return boolean
+     */
+    public static function isLocked()
+    {
+    	$model = static::findOne(1);
+    	return ($model->lockState == 1) ? true : false;
+    }
+
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\base\Model;
+
+/**
+ * LoginForm is the model behind the login form.
+ */
+class LoginForm extends Model
+{
+    public $username;
+    public $email;
+    public $password;
+    public $rememberMe = true;
+
+    private $_user = false;
+
+
+    /**
+     * @return array the validation rules.
+     */
+    public function rules()
+    {
+        return
+		[
+            // username and password are both required
+            [['username', 'password'], 'required'],
+            // rememberMe must be a boolean value
+            ['rememberMe', 'boolean'],
+            // password is validated by validatePassword()
+            ['password', 'validatePassword'],
+        ];
+    }
+
+    /**
+     * Validates the password.
+     * This method serves as the inline validation for password.
+     *
+     * @param string $attribute the attribute currently being validated
+     * @param array $params the additional name-value pairs given in the rule
+     */
+    public function validatePassword($attribute, $params)
+    {
+        if (!$this->hasErrors())
+		{
+            $user = $this->getUser();
+
+            if (!$user || !$user->validatePassword($this->password))
+			{
+                $this->addError($attribute, 'Incorrect username or password.');
+            }
+        }
+    }
+
+    /**
+     * Logs in a user using the provided username and password.
+     * @return boolean whether the user is logged in successfully
+     */
+    public function login()
+    {
+        if ($this->validate())
+		{
+            return Yii::$app->user->login($this->getUser(), $this->rememberMe ? 3600*24*30 : 0);
+        }
+		else
+		{
+            return false;
+        }
+    }
+
+	/**
+	 *
+	 */
+	public function loginAdmin()
+	{
+		if ($this->validate() && User::isUserAdmin($this->username))
+		{
+			return Yii::$app->user->login($this->getUser(), $this->rememberMe ? 3600*24*30 : 0);
+		}
+		else
+		{
+			return false;
+		}
+	}
+	
+    /**
+     * Finds user by [[username]]
+     *
+     * @return User|null
+     */
+    public function getUser()
+    {
+        if ($this->_user === false) {
+            $this->_user = User::findByUsername($this->username);
+        }
+
+        return $this->_user;
+    }
+}
+<?php
+namespace app\models;
+
+use Yii;
+use app\models\User;
+use yii\base\Model;
+
+/**
+ * Password reset request form
+ */
+class PasswordResetRequestForm extends Model
+{
+    public $email;
+    public $username;
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            ['username', 'filter', 'filter' => 'trim'],
+            ['username', 'required'],
+            ['username', 'exist',
+                'targetClass' => '\app\models\User',
+                'filter' => ['status' => User::STATUS_ACTIVE],
+                'message' => 'There is no user with this username.'
+            ],
+        ];
+    }
+
+    /**
+     * Sends an email with a link, for resetting the password.
+     *
+     * @return boolean whether the email was sent
+     */
+    public function sendEmail()
+    {
+        /* @var $user User */
+        $user = User::findOne(
+        [
+            'status' => User::STATUS_ACTIVE,
+            'username' => $this->username,
+        ]);
+
+        if ($user)
+        {
+            if (!User::isPasswordResetTokenValid($user->password_reset_token))
+            {
+                $user->generatePasswordResetToken();
+            }
+
+            if ($user->save())
+            {
+            	if (Yii::$app->mailer->useFileTransport == true)
+            	{
+            		// Save password reset link as a file if email is not available
+            		$filename = Yii::getAlias('@runtime') . '/' . $user->username . '-password-reset.txt';
+	            	$resetLink = Yii::$app->urlManager->createAbsoluteUrl(['site/reset-password', 'token' => $user->password_reset_token]);
+	            	$myFile = fopen($filename, 'w');
+	            	if ($myFile !== false)
+	            	{
+	            		fwrite($myFile, 'User: ' . $user->username . "\r\n");
+	            		fwrite($myFile, 'URL: ' . $resetLink . "\r\n");
+	            		fclose($myFile);
+	            		return true;
+	            	}
+            	}
+            	else
+            	{
+            		return Yii::$app->mailer->compose(['html' => 'passwordResetToken-html', 'text' => 'passwordResetToken-text'], ['user' => $user])
+                	    ->setFrom([Yii::$app->params['supportEmail'] => Yii::$app->name . ' robot'])
+                	    ->setTo($user->email)
+                	    ->setSubject('Password reset for ' . Yii::$app->name)
+                	    ->send();
+            	}
+           }
+        }
+        return false;
+    }
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+
+/**
+ * ProgressBar class uses Yii cache or file to store progress data and provides functions to get and set data
+ * (From Yii tutorial by hehbhehb)
+ *
+ * @property string $key
+ * @property array $data
+ * @property string $path
+ *
+ */
+class ProgressBar
+{
+	private $key;
+
+	private $data;
+	private $path;
+
+	private static $useFile = true;
+
+	public function __construct($key)
+	{
+		$this->key = $key;
+		$this->path = Yii::getAlias('@runtime') . DIRECTORY_SEPARATOR;
+	}
+
+	public function start($total, $redirect)
+	{
+		$this->data['running'] = 1;
+		$this->data['done'] = 0;
+		$this->data['total'] = $total;
+		$this->data['redirect'] = $redirect;
+		$this->data['error'] = 0;
+		$this->data['errorMessage'] = '';
+		$this->put();
+	}
+
+	public function stop($message)
+	{
+		$this->data['running'] = 0;
+		$this->data['error'] = 1;
+		$this->data['errorMessage'] = $message;
+		$this->put();
+	}
+
+	public function complete()
+	{
+		$this->data['running'] = 0;
+		$this->data['done'] = $this->data['total'];
+		$this->data['error'] = 0;
+		$this->data['errorMessage'] = '';
+		$this->put();
+	}
+
+	public function inc($step=1)
+	{
+		$this->data['done'] += $step;
+		$this->put();
+	}
+
+	public function set($done)
+	{
+		$this->data['done'] = $done;
+		$this->put();
+	}
+
+	public function put()
+	{
+		if (self::$useFile)
+		{
+			file_put_contents($this->path . "{$this->key}", json_encode($this->data));
+		}
+		else
+		{
+			$ret = Yii::$app->cache->set($this->key,
+			[
+				'running' => $this->data['running'],
+				'total' => $this->data['total'],
+				'done' => $this->data['done'],
+				'redirect' => $this->data['redirect'],
+				'error' => $this->data['error'],
+				'errorMessage' => $this->data['errorMessage']
+			],
+			1 * 60);
+		}
+	}
+
+	public static function get($key)
+	{
+		$path = Yii::getAlias('@runtime') . DIRECTORY_SEPARATOR;
+		$file = $path . "{$key}";
+
+		if (self::$useFile)
+		{
+			if (file_exists($file))
+			{
+				$data = json_decode(file_get_contents($file), true);
+				if ($data['running'] == 0)
+				{
+					unlink($file);
+				}
+			}
+			else
+			{
+				$data = ['running' => 1, 'total' => 100, 'done' => 0, 'redirect' => '', 'error' => 0, 'errorMessage' => ''];
+			}
+		}
+		else
+		{
+			$data = Yii::$app->cache->get($key);
+			if($data === false)
+			{
+				$data = ['running' => 1, 'total'=> 100, 'done'=> 0, 'redirect' => '', 'error' => 0, 'errorMessage' => ''];
+			}
+		}
+		return $data;
+	}
+}<?php
+namespace app\models;
+
+use app\models\User;
+use yii\base\InvalidParamException;
+use yii\base\Model;
+use Yii;
+
+/**
+ * Password reset form
+ */
+class ResetPasswordForm extends Model
+{
+    public $password;
+
+    /**
+     * @var app\models\User
+     */
+    private $_user;
+
+
+    /**
+     * Creates a form model given a token.
+     *
+     * @param  string                          $token
+     * @param  array                           $config name-value pairs that will be used to initialize the object properties
+     * @throws \yii\base\InvalidParamException if token is empty or not valid
+     */
+    public function __construct($token, $config = [])
+    {
+        if (empty($token) || !is_string($token)) {
+            throw new InvalidParamException('Password reset token cannot be blank.');
+        }
+        $this->_user = User::findByPasswordResetToken($token);
+        if (!$this->_user) {
+            throw new InvalidParamException('Wrong password reset token.');
+        }
+        parent::__construct($config);
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            ['password', 'required'],
+            ['password', 'string', 'min' => 5],
+        ];
+    }
+
+    /**
+     * Resets password.
+     *
+     * @return boolean if password was reset.
+     */
+    public function resetPassword()
+    {
+        $user = $this->_user;
+        $user->setPassword($this->password);
+        $user->removePasswordResetToken();
+
+        return $user->save();
+    }
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\helpers\ArrayHelper;
+use yii\behaviors\TimestampBehavior;
+use app\models\Event;
+use app\models\Entrant;
+use app\models\Fights;
+
+/**
+ * This is the model class for table "{{%robot}}".
+ *
+ * @property integer $id
+ * @property string $name
+ * @property integer $teamId
+ * @property integer $classId
+ * @property integer $typeId
+ * @property integer $active
+ *
+ * @property DoubleElim[] $doubleElims
+ * @property Entrant[] $entrants
+ * @property User $team
+ * @property RobotClass $class
+ */
+class Robot extends \yii\db\ActiveRecord
+{
+    /**
+     * @inheritdoc
+     */
+    public function behaviors()
+    {
+        return
+		[
+            TimestampBehavior::className(),
+        ];
+    }
+
+	/**
+	 * Generate array to populate dropdown list in forms
+	 * @param boolean $active
+	 * @param integer $eventId
+	 * @param integer $teamId
+	 * @return array
+	 */
+	public static function dropdown($active = NULL, $eventId = NULL, $teamId = NULL)
+	{
+		$query = static::find();
+		if (isset($active))
+		{
+			$query->andWhere(['active' => $active]);
+		}
+		if (isset($teamId))
+		{
+			$query->andWhere(['teamId' => $teamId]);
+		}
+		if (isset($eventId))
+		{
+			$event = Event::findOne($eventId);
+			// get all ids of robots entered in current event, return as array
+			$array = ArrayHelper::getColumn(Entrant::find()->where(['eventId' => $eventId])->all(), 'robotId');
+			// modify query to exclude ids in list
+			$query->andWhere(['not in', 'id', $array]);
+			// modify query to exclude robots from bigger classes than the event is for
+			$query->andWhere(['<=', 'classId', $event->classId]);
+		}
+		$models = $query->orderBy('name')->all();
+		$robotDropdown[] = '';
+		$classDropdown[] = ['data-class' => '0'];
+		foreach ($models as $model)
+		{
+			if ($model->typeId != 0)
+			{
+				$robotDropdown[$model->id] = "$model->name" .
+					' (' . $model->type->name . ') [' . $model->team->team_name . ']';
+			}
+			else
+			{
+				$robotDropdown[$model->id] = "$model->name" .
+					' [' . $model->team->team_name . ']';
+			}
+			$classDropdown[$model->id] = ['data-class' => "$model->classId"] ;
+		}
+		return ['robot' => $robotDropdown, 'class' => ['options' => $classDropdown]];
+	}
+
+	/**
+	 * Return checked if robot is entrant to any event which is not complete (or selected event)
+	 * Return value is checked attribute of checkbox
+	 * @param integer $target
+	 * @param integer $eventId (optional)
+	 * @return string
+	 */
+	public static function isSignedUp($target, $eventId = NULL)
+	{
+		if ($eventId == NULL)
+		{
+			if ($events = Event::find()->andWhere(['not',['state' => 'Complete']])->all())
+			{
+				$robots = 0;
+				foreach ($events as $event)
+				{
+					$robots += static::find()
+						->joinWith('entrants')
+						->andWhere(['{{%entrant}}.`robotId`' => $target])
+						->andWhere(['{{%entrant}}.`eventId`' => $event->id])
+						->count();
+				}
+				return ($robots > 0) ? 'checked' : '';
+			}
+			return '';
+		}
+		else
+		{
+			$robots = static::find()
+			->joinWith('entrants')
+			->andWhere(['{{%entrant}}.`robotId`' => $target])
+			->andWhere(['{{%entrant}}.`eventId`' => $eventId])
+			->count();
+			return ($robots > 0) ? 'checked' : '';
+		}
+	}
+
+	/**
+	 * Return true if robot is not in any event (so may be deleted)
+	 * @param integer $id
+	 * @return boolean
+	 */
+	public function isOKToDelete($id)
+	{
+		return Entrant::find()->where(['robotId' => $id])->count() > 0 ? false : true;
+	}
+
+	/**
+	 * Return true if robot is not in any fight (so may be edited)
+	 * @param integer $id
+	 * @return boolean
+	 */
+	public function isOKToEdit($id)
+	{
+		$entrants = Entrant::find()->where(['robotId' => $id])->all();
+		foreach ($entrants as $entrant)
+		{
+			if (Fights::find()->where(['robot1Id' => $entrant->id])
+				->orWhere(['robot2Id' => $entrant->id])
+				->count() > 0)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	public function isOKToRetire($id)
+	{
+		$entrants = Entrant::find()->where(['robotId' => $id])->all();
+		foreach ($entrants as $entrant)
+		{
+			if (Event::find()->where(['id' => $entrant->eventId])
+				->andWhere(['not', ['state' => 'Complete']])->count() > 0)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Return true if robot belongs to logged-in user
+	 * @param model $model
+	 * @return boolean
+	 */
+	public function isUser($model)
+	{
+		if (!Yii::$app->user->isGuest)
+		{
+			return (Yii::$app->user->identity->id == $model->teamId) ? true : false;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+    /**
+     * @inheritdoc
+     */
+    public static function tableName()
+    {
+        return '{{%robot}}';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return
+		[
+            [['name', 'teamId', 'classId', 'typeId', 'active'], 'required'],
+            [['teamId', 'classId', 'typeId'], 'integer'],
+			[['active'],'boolean'],
+			[['active'], 'default', 'value' => 1],
+            [['name'], 'string', 'max' => 100],
+			[['name'], 'unique',
+				'targetAttribute' => ['name', 'teamId'],
+				'message' => 'Team already contains a robot named "{value}".'],
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function attributeLabels()
+    {
+        return
+		[
+            'id' => 'ID',
+            'name' => 'Robot Name',
+            'teamId' => 'Team Name',
+            'classId' => 'Class',
+			'typeId' => 'Type',
+			'active' => 'Active',
+        ];
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getDoubleElims()
+    {
+        return $this->hasMany(DoubleElim::className(), ['loserId' => 'id']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getEntrants()
+    {
+        return $this->hasMany(Entrant::className(), ['robotId' => 'id']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getTeam()
+    {
+        return $this->hasOne(User::className(), ['id' => 'teamId']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getClass()
+    {
+        return $this->hasOne(RobotClass::className(), ['id' => 'classId']);
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getType()
+    {
+    	return $this->hasOne(RobotType::className(), ['id' => 'typeId']);
+    }
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+
+/**
+ * This is the model class for table "{{%robot_class}}".
+ *
+ * @property integer $id
+ * @property string $name
+ *
+ * @property Robot[] $robots
+ */
+class RobotClass extends \yii\db\ActiveRecord
+{
+	public static function dropdown()
+	{
+		$models = static::find()->all();
+		foreach ($models as $model)
+		{
+			$dropdown[$model->id] = $model->name;
+		}
+		return $dropdown;
+	}
+
+    /**
+     * @inheritdoc
+     */
+    public static function tableName()
+    {
+        return '{{%robot_class}}';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['name'], 'required'],
+            [['name'], 'string', 'max' => 20]
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function attributeLabels()
+    {
+        return [
+            'id' => 'ID',
+            'name' => 'Class',
+        ];
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getRobots()
+    {
+        return $this->hasMany(Robot::className(), ['classId' => 'id']);
+    }
+}
+<?php
+
+namespace app\models;
+
+use Yii;
+use yii\base\Model;
+use yii\data\ActiveDataProvider;
+use app\models\Robot;
+
+/**
+ * RobotSearch represents the model behind the search form about `app\models\Robot`.
+ */
+class RobotSearch extends Robot
+{
+	public function attributes()
+	{
+		return array_merge(parent::attributes(), ['team.name', 'class.name']);
+	}
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['id', 'teamId', 'classId'], 'integer'],
+            [['name', 'team.name', 'class.name', 'type'], 'safe'],
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function scenarios()
+    {
+        // bypass scenarios() implementation in the parent class
+        return Model::scenarios();
+    }
+
+    /**
+     * Creates data provider instance with search query applied
+     *
+     * @param array $params
+     *
+     * @return ActiveDataProvider
+     */
+    public function search($params)
+    {
+        $query = Robot::find();
+
+        $dataProvider = new ActiveDataProvider([
+            'query' => $query,
+        ]);
+
+		$dataProvider->sort->attributes['team.name'] = [
+			'asc' => ['{{%user}}.team_name' => SORT_ASC],
+			'desc' => ['{{%user}}.team_name' => SORT_DESC],
+		];
+
+		$dataProvider->sort->attributes['class.name'] = [
+			'asc' => ['{{%robot_class}}.name' => SORT_ASC],
+			'desc' => ['{{%robot_class}}.name' => SORT_DESC],
+		];
+
+		$query->joinWith(['team', 'class']);
+
+        $this->load($params);
+
+        if (!$this->validate()) {
+            // uncomment the following line if you do not want to any records when validation fails
+            // $query->where('0=1');
+            return $dataProvider;
+        }
+
+        $query->andFilterWhere([
+            'id' => $this->id,
+            'teamId' => $this->teamId,
+            'classId' => $this->classId,
+        ]);
+
+        $query->andFilterWhere(['like', '{{%robot}}.name', $this->name]);
+        $query->andFilterWhere(['like', '{{%robot}}.type', $this->type]);
+
+		$query->andFilterWhere(['like', '{{%user}}.team_name', $this->getAttribute('team.name')]);
+		$query->andFilterWhere(['like', '{{%robot_class}}.name', $this->getAttribute('class.name')]);
+
+        return $dataProvider;
+    }
+
+}<?php
+
+namespace app\models;
+
+use Yii;
+
+/**
+ * This is the model class for table "{{%robot_type}}".
+ *
+ * @property integer $id
+ * @property string $name
+ *
+ * @property Robot[] $robots
+ */
+class RobotType extends \yii\db\ActiveRecord
+{
+	public static function dropdown()
+	{
+		$models = static::find()->all();
+		foreach ($models as $model)
+		{
+			$dropdown[$model->id] = $model->name;
+		}
+		return $dropdown;
+	}
+
+    /**
+     * @inheritdoc
+     */
+    public static function tableName()
+    {
+        return '{{%robot_type}}';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            [['name'], 'required'],
+            [['name'], 'string', 'max' => 32]
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function attributeLabels()
+    {
+        return [
+            'id' => 'ID',
+            'name' => 'Type',
+        ];
+    }
+
+    /**
+     * @return \yii\db\ActiveQuery
+     */
+    public function getRobots()
+    {
+        return $this->hasMany(Robot::className(), ['typeId' => 'id']);
+    }
+}
+<?php
+namespace app\models;
+
+use app\models\User;
+use yii\base\Model;
+use Yii;
+
+/**
+ * Signup form
+ */
+class SignupForm extends Model
+{
+    public $username;
+    public $email;
+    public $password;
+    public $team_name;
+    public $captcha;
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            ['username', 'filter', 'filter' => 'trim'],
+            ['username', 'required'],
+            ['username', 'unique', 'targetClass' => '\app\models\User', 'message' => 'Username "{value}" has already been taken.'],
+            ['username', 'string', 'min' => 2, 'max' => 255],
+
+        	['email', 'filter', 'filter' => 'trim'],
+        	['email', 'required'],
+       		['email', 'email'],
+
+        	['team_name', 'filter', 'filter' => 'trim'],
+        	['team_name', 'required'],
+            ['team_name', 'unique', 'targetClass' => '\app\models\User', 'message' => 'Team name "{value}" has already been taken.'],
+        	['team_name', 'string', 'min' => 2, 'max' => 255],
+
+            ['password', 'required'],
+            ['password', 'string', 'min' => 5],
+
+        	['captcha', 'captcha'],
+        	['captcha', 'required'],
+        ];
+    }
+
+    public function attributeLabels()
+    {
+    	return
+    	[
+    			'id' => 'ID',
+    			'username' => 'Username',
+    			'email' => 'Email Address',
+    			'team_name' => 'Team',
+    	];
+    }
+
+    /**
+     * Signs user up.
+     *
+     * @return User|null the saved model or null if validation fails
+     */
+    public function signup()
+    {
+        if ($this->validate())
+		{
+            $user = new User();
+            $user->username = $this->username;
+            $user->email = $this->email;
+            $user->team_name = $this->team_name;
+            $user->setPassword($this->password);
+            $user->generateAuthKey();
+            $user->save(false);
+			return $user;
+        }
+
+        return null;
+    }
+}
+<?php
+namespace app\models;
+
+use app\models\User;
+use yii\base\Model;
+use Yii;
+
+/**
+ * Update form
+ */
+class UpdateForm extends Model
+{
+    public $id;
+	public $username;
+    public $email;
+    public $password;
+    public $team_name;
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return [
+            ['username', 'filter', 'filter' => 'trim'],
+            ['username', 'required'],
+
+        	['email', 'filter', 'filter' => 'trim'],
+        	['email', 'required'],
+       		['email', 'email'],
+
+        	['team_name', 'filter', 'filter' => 'trim'],
+        	['team_name', 'required'],
+        	['team_name', 'string', 'min' => 2, 'max' => 255],
+
+        ];
+    }
+
+    public function attributeLabels()
+    {
+    	return
+    	[
+    			'id' => 'ID',
+    			'username' => 'Username',
+    			'email' => 'Email Address',
+    			'team_name' => 'Team',
+    	];
+    }
+
+    /**
+     * Updates user profile.
+     *
+     * @return User|null the saved model or null if validation fails
+     */
+    public function update($id)
+    {
+        if ($this->validate())
+		{
+            $user = User::findIdentity($id);
+            $user->username = $this->username;
+            $user->email = $this->email;
+            $user->team_name = $this->team_name;
+            $user->update();
+            //$user->save(false);
+
+			return $user;
+        }
+
+        return null;
+    }
+}
+<?php
+namespace app\models;
+
+use Yii;
+use yii\base\Model;
+use yii\web\UploadedFile;
+
+class UploadForm extends Model
+{
+	/**
+	 * @var UploadedFile
+	 */
+	public $uploadFile;
+	public $savedFile;
+
+	public function rules()
+	{
+		return [
+				['uploadFile', 'required'],
+//				['uploadFile', 'validateFile'],
+		];
+	}
+
+	public function upload()
+	{
+		if ($this->validate())
+		{
+			$this->savedFile = Yii::getAlias('@runtime') . DIRECTORY_SEPARATOR  . $this->uploadFile->baseName . '.' . $this->uploadFile->extension;
+			$this->uploadFile->saveAs($this->savedFile);
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	public function validateFile($attribute, $params)
+	{
+		$finfo = finfo_open(FILEINFO_MIME_TYPE);
+		//$mtype = finfo_file($finfo, Yii::getAlias('@runtime') . DIRECTORY_SEPARATOR  . $this->uploadFile);
+		$mtype = finfo_file($finfo, $this->uploadFile);
+		finfo_close($finfo);
+		if (($mtype == 'text/plain') || ($mtype == 'application/x-sql'))
+		{
+			if ($this->uploadFile->extension == 'sql')
+			{
+				return true;
+			}
+			else
+			{
+				// wrong extension
+				$this->addError($attribute, 'Only SQL files may be uploaded. File extension must be .sql');
+			}
+		}
+		else
+		{
+			// wrong MIME type
+			$this->addError($attribute, 'Only SQL files may be uploaded. MIME type must be application/x-sql or text/plain');
+		}
+		return false;
+	}
+}<?php
+namespace app\models;
+
+use Yii;
+use yii\base\NotSupportedException;
+use yii\behaviors\TimestampBehavior;
+use yii\db\ActiveRecord;
+use yii\web\IdentityInterface;
+use app\models\Robot;
+
+/**
+ * User model
+ *
+ * @property integer $id
+ * @property string $username
+ * @property string $password_hash
+ * @property string $password_reset_token
+ * @property string $email
+ * @property string $auth_key
+ * @property integer $status
+ * @property integer $created_at
+ * @property integer $updated_at
+ * @property string $password write-only password
+ * @property integer $user_group
+ * @property string $team_name
+ */
+class User extends ActiveRecord implements IdentityInterface
+{
+    const STATUS_DELETED = 0;
+    const STATUS_ACTIVE = 10;
+
+	const ROLE_ADMIN = 1;
+	const ROLE_TEAM = 2;
+
+    /**
+     * @inheritdoc
+     */
+    public static function tableName()
+    {
+        return '{{%user}}';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function behaviors()
+    {
+        return
+		[
+            TimestampBehavior::className(),
+        ];
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function rules()
+    {
+        return
+		[
+            ['status', 'default', 'value' => self::STATUS_ACTIVE],
+            ['status', 'in', 'range' => [self::STATUS_ACTIVE, self::STATUS_DELETED]],
+			['user_group', 'default', 'value' => self::ROLE_TEAM],
+			['user_group', 'in', 'range' => [self::ROLE_ADMIN, self::ROLE_TEAM]],
+        ];
+    }
+
+    /**
+     * Return an array of user IDs and names to populate a dropdown box
+     * Only returns users that are teams (not administrators)
+     * @param string $id
+     * @return array
+     */
+    public static function teamDropdown($id = NULL)
+    {
+    	if ($id != NULL)
+    	{
+    		$models = static::find()->where(['id' => $id])->all();
+    	}
+    	else
+    	{
+    		$models = static::find()
+    			->where(['user_group' => self::ROLE_TEAM])
+    			->orderBy('team_name')
+    			->all();
+    	}
+    	$dropdown = [];
+    	foreach ($models as $model)
+    	{
+    		$dropdown[$model->id] = $model->team_name;
+    	}
+    	return $dropdown;
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public static function findIdentity($id)
+    {
+        return static::findOne(['id' => $id, 'status' => self::STATUS_ACTIVE]);
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public static function findIdentityByAccessToken($token, $type = null)
+    {
+        throw new NotSupportedException('"findIdentityByAccessToken" is not implemented.');
+    }
+
+    /**
+     * Finds user by username
+     *
+     * @param string $username
+     * @return static|null
+     */
+    public static function findByUsername($username)
+    {
+        return static::findOne(['username' => $username, 'status' => self::STATUS_ACTIVE]);
+    }
+
+    /**
+     * Finds user by password reset token
+     *
+     * @param string $token password reset token
+     * @return static|null
+     */
+    public static function findByPasswordResetToken($token)
+    {
+        if (!static::isPasswordResetTokenValid($token))
+		{
+            return null;
+        }
+
+        return static::findOne(
+		[
+            'password_reset_token' => $token,
+            'status' => self::STATUS_ACTIVE,
+        ]);
+    }
+
+    /**
+     * Finds out if password reset token is valid
+     *
+     * @param string $token password reset token
+     * @return boolean
+     */
+    public static function isPasswordResetTokenValid($token)
+    {
+        if (empty($token))
+		{
+            return false;
+        }
+        $expire = Yii::$app->params['user.passwordResetTokenExpire'];
+        $parts = explode('_', $token);
+        $timestamp = (int) end($parts);
+        return $timestamp + $expire >= time();
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function getId()
+    {
+        return $this->getPrimaryKey();
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function getAuthKey()
+    {
+        return $this->auth_key;
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function validateAuthKey($authKey)
+    {
+        return $this->getAuthKey() === $authKey;
+    }
+
+    /**
+     * Validates password
+     *
+     * @param string $password password to validate
+     * @return boolean if password provided is valid for current user
+     */
+    public function validatePassword($password)
+    {
+        return Yii::$app->security->validatePassword($password, $this->password_hash);
+    }
+
+    /**
+     * Generates password hash from password and sets it to the model
+     *
+     * @param string $password
+     */
+    public function setPassword($password)
+    {
+        $this->password_hash = Yii::$app->security->generatePasswordHash($password);
+    }
+
+    /**
+     * Generates "remember me" authentication key
+     */
+    public function generateAuthKey()
+    {
+        $this->auth_key = Yii::$app->security->generateRandomString();
+    }
+
+    /**
+     * Generates new password reset token
+     */
+    public function generatePasswordResetToken()
+    {
+        $this->password_reset_token = Yii::$app->security->generateRandomString() . '_' . time();
+    }
+
+    /**
+     * Removes password reset token
+     */
+    public function removePasswordResetToken()
+    {
+        $this->password_reset_token = null;
+    }
+
+	/**
+	 * Check whether current user belongs to admin group
+	 * @return boolean
+	 */
+	public static function isUserAdmin()
+	{
+		if ((!Yii::$app->user->isGuest) && (Yii::$app->user->identity->user_group == self::ROLE_ADMIN))
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	/**
+	 * Check whether ID (probably team ID) is current user
+	 * @param integer $id The ID to be checked
+	 * @return boolean
+	 */
+	public static function isCurrentUser($id)
+	{
+		if ((!Yii::$app->user->isGuest) && (Yii::$app->user->identity->id == $id))
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	/**
+	 * Get all robots belonging to user (team)
+	 * @return \yii\db\ActiveQuery
+	 */
+	public function getRobots()
+	{
+		return $this->hasMany(Robot::className(), ['teamId' => 'id']);
+	}
+
+	/**
+	 * Return true if user's team contains no robots (so may be deleted)
+	 * @param integer $id
+	 * @return boolean
+	 */
+	public function isTeamEmpty($id)
+	{
+		return Robot::find()->where(['teamId' => $id])->count() > 0 ? false : true;
+	}
+
+}

@@ -1,10 +1,10 @@
 <?php
 
-return [
+[
     'class' => 'yii\db\Connection',
-    'dsn' => 'mysql:host=localhost;dbname=antlog',
+   'dsn' => 'mysql:host=localhost;dbname=antlog',
     'username' => 'root',
-    'password' => '',
+    'password' => '', 
     'charset' => 'utf8',
-	'tablePrefix' => 'aws_',
+    'tablePrefix' => 'aws_',
 ];

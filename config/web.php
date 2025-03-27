@@ -18,6 +18,13 @@ $config = [
     	}
     },
     'components' => [
+    'i18n' => [
+    'translations' => [
+        '*' => [
+            'class' => 'yii\i18n\PhpMessageSource',
+        ],
+    ],
+],
 		'urlManager' => [
     		'class' => 'yii\web\UrlManager',
 			'showScriptName' => false,
@@ -93,7 +100,14 @@ $config = [
 				],
             ],
         ],
-        'db' => require(__DIR__ . '/db.php'),
+        'db' => [
+    'class' => 'yii\db\Connection',
+   'dsn' => 'mysql:host=localhost;dbname=antlog',
+    'username' => 'root',
+    'password' => '', 
+    'charset' => 'utf8',
+    'tablePrefix' => 'aws_',
+],
     ],
     'params' => $params,
 ];

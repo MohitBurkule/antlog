@@ -1,0 +1,29 @@
+version: '3.8'
+services:
+  web:
+    build: .
+    ports:
+      - "80:80"
+    volumes:
+      - ./:/var/www/html/  # Mount your entire project directory
+    depends_on:
+      - db
+    environment:
+      PHP_MEMORY_LIMIT: 256M
+      PHP_UPLOAD_MAX_FILESIZE: 10M
+      PHP_POST_MAX_SIZE: 10M
+
+  db:
+    image: mysql:5.7  # You can choose a different MySQL version if needed
+    environment:
+      MYSQL_ROOT_PASSWORD: your_root_password
+      MYSQL_DATABASE: antlog
+      MYSQL_USER: antlog_user
+      MYSQL_PASSWORD: your_antlog_password
+    volumes:
+      - db_data:/var/lib/mysql
+    ports:
+      - "3306:3306"  # Optional: Expose MySQL port to your host (use with caution in production)
+
+volumes:
+  db_data:
